@@ -10,7 +10,7 @@ Built with **Sendblue** (iMessage API), **Anthropic Claude** (AI parsing), Node.
 
 On first launch, grade-brain texts you asking if you want to connect Canvas. If you say yes, it walks you through getting a personal access token and automatically imports all your active courses — categories, weights, and grades — with no syllabus pasting required.
 
-Once connected, text **"sync canvas"** any time to pull the latest grades.
+Once connected, text **"sync canvas"** any time to pull the latest scores. Canvas scores and manually entered grades are stored separately, so syncing Canvas never overwrites grades you typed in yourself.
 
 > **Canvas limitation:** Canvas does not expose class averages to the API. If your professor curves grades based on the class average, you still need to enter those manually (e.g. "class average was 71 on bio midterm"). The curve calculation logic then works exactly the same regardless of how the class was set up.
 
@@ -27,6 +27,9 @@ Text your Sendblue number and grade-brain handles the rest:
 | `class average was 71 on bio midterm` | Logs the class average (used for curve calculations) |
 | `what's my grade in bio?` | Shows current grade, per-category breakdown, and what you need on remaining assignments |
 | `show all my grades` | One-line summary of every class |
+| `bio is 3 credits` | Sets credit hours for a class |
+| `my GPA` | Shows semester GPA weighted by credit hours |
+| `update syllabus for bio` | Update weights mid-semester without losing grades |
 | `delete bio` | Removes a class |
 | `sync canvas` | Pull latest grades from Canvas |
 | `connect canvas` | (Re)link your Canvas account |
@@ -98,7 +101,7 @@ Send `new class: Bio 101` to your Sendblue number from your phone.
 2. **Bot:** `Starting Bio 101! Paste the grading breakdown from your syllabus.`
 3. **You:** *(paste messy syllabus text)*
    ```
-   Grading: Homework assignments 20%, Two midterm exams 40% total, Final exam 30%,
+   Grading: Homework assignments 20% (drop lowest), Two midterm exams 40% total, Final exam 30%,
    Participation and attendance 10%
    ```
 4. **Bot:**
@@ -112,7 +115,7 @@ Send `new class: Bio 101` to your Sendblue number from your phone.
    Does it have a curve?
    1 – Flat points added to all scores
    2 – Scale to class mean
-   3 – Bell curve / distribution
+   3 – Norm-referenced / median mapped to a letter grade
    4 – No curve
    ```
 5. **You:** `2`
@@ -128,18 +131,18 @@ After entering some grades:
 
 ```
 Bio 101
-Current: 88.2% B+
+Raw: 87.4% B+
+Curved: 91.2% A- — +3.8 pts (scale to mean 75)
 (70% of grade entered)
 
-Midterm Exams (40%): 85 → 89 curved
-Homework (20%): 92.3 (avg of 4)
-Participation (10%): 95
+Midterm Exams (40%): 85%
+Homework (20%): 92.3% (avg of 4, 1 lowest dropped)
+Participation (10%): 95%
 
 To earn:
-A: need 100 on remaining 30%
-A-: need 93 on remaining 30%
-B+: need 84 on remaining 30%
-B: need 74 on remaining 30%
+A: need 97 on remaining 30%
+A-: need 90 on remaining 30%
+B+: need 81 on remaining 30%
 ```
 
 ---
@@ -148,49 +151,45 @@ B: need 74 on remaining 30%
 
 | Type | How it works |
 |---|---|
-| **Flat** | Adds a fixed number of points to every score (e.g. +5) |
-| **Scale to mean** | When you enter the class average, the bot adds the difference between the target mean and actual mean to your score |
-| **Distribution** | Estimates your letter grade using a z-score against the class average — shown as an estimate only |
+| **Flat** | Adds a fixed number of points to every score (e.g. +5), caps at 100 |
+| **Scale to mean** | Shifts your grade by (targetAverage − classAverage) when you enter the class average, caps at 100, never pulls scores down |
+| **Norm-referenced** | You enter the class median and what letter grade the professor maps it to. Uses relative positioning to assign a letter grade above or below the median |
 | **None** | No curve applied |
 
-For mean-based curves: if you said the target mean is 75 and the class average on the midterm was 71, the bot adds +4 to your midterm score automatically.
+For mean-based curves: if the class average comes in higher than the target, no shift is applied and the bot explains why.
+
+For norm-referenced curves: grade projection ("what do I need for an A?") is unavailable since the final letter depends on where the class median lands.
+
+---
+
+## Drop-lowest
+
+If your syllabus says "drop the lowest homework", Claude detects it automatically during setup and stores it on that category. The lowest score is excluded from the average once you have more grades than the drop count — e.g. if you drop 1 and only have 1 homework entered, all grades still count. The breakdown shows `(1 lowest dropped)` when a drop is active.
+
+---
+
+## Semester GPA
+
+Set credit hours per class and grade-brain calculates your weighted semester GPA:
+
+```
+you: bio is 3 credits
+you: data structures is 4 credits
+you: my GPA
+
+Bot: Semester GPA: 3.52
+
+• Bio 101: A- (3 cr)
+• Data Structures: B+ (4 cr)
+```
+
+If any class is missing credit hours, the bot lists them and tells you how to set them.
 
 ---
 
 ## Data storage
 
-All data is saved to `classes.json` in the project folder. You can edit it directly if needed. The structure looks like:
-
-```json
-{
-  "classes": {
-    "bio 101": {
-      "name": "Bio 101",
-      "categories": [
-        { "name": "Midterm Exams", "weight": 40 },
-        { "name": "Final Exam", "weight": 30 },
-        { "name": "Homework", "weight": 20 },
-        { "name": "Participation", "weight": 10 }
-      ],
-      "grades": {
-        "midterm exams": [85],
-        "homework": [90, 88, 95, 96],
-        "participation": [95]
-      },
-      "classAverages": {
-        "midterm exams": 71
-      },
-      "curve": {
-        "type": "mean",
-        "targetMean": 75
-      }
-    }
-  },
-  "userStates": {
-    "+12025551234": { "step": "idle", "pendingClass": null }
-  }
-}
-```
+All data is saved to `classes.json` in the project folder. You can edit it directly if needed. Canvas grades and manually entered grades are stored in separate fields (`canvasGrades` and `grades`) so a Canvas sync never clobbers manual entries.
 
 ---
 
@@ -204,7 +203,7 @@ grade-brain/
 ├── canvas.js      — Canvas LMS API: fetch courses, assignment groups, grades
 ├── sendblue.js    — Sendblue API wrapper (send iMessages)
 ├── storage.js     — Read/write classes.json + write Canvas creds to .env
-├── grades.js      — Grade math: weighted averages, curves, projections
+├── grades.js      — Grade math: weighted averages, curves, projections, GPA
 ├── classes.json   — Auto-created when you add your first class
 ├── .env           — Your API keys (never commit this)
 └── .env.example   — Template for .env
@@ -214,7 +213,8 @@ grade-brain/
 
 ## Limitations
 
-- **Photos**: If you text a photo of your syllabus, the bot will ask you to paste the text instead. (Claude can read text, not images, via this integration.)
-- **Multiple grades per category**: If you have multiple exams in one category, the bot averages them. To drop the lowest, enter the average manually.
-- **Distribution curves**: The letter grade estimate is a rough approximation. Real bell curves vary by professor.
+- **Photos**: Syllabus photos and PDFs are supported. If parsing fails, try pasting the grading section as text.
+- **Multiple grades per category**: The bot averages them. Use the drop-lowest feature if your syllabus supports it; otherwise enter the average manually.
+- **Norm-referenced curves**: Grade projection is not available — the final letter depends on the class median, which isn't known until grades are posted.
 - **Always-on**: The bot only works while your local server (and ngrok tunnel) are running. For a permanent setup, deploy to Railway, Render, or Fly.io.
+- **Single user**: The bot only responds to the phone number set in `MY_PHONE`.
