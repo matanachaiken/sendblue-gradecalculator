@@ -1,0 +1,178 @@
+{
+  "classes": {
+    "hum": {
+      "name": "Hum",
+      "categories": [
+        {
+          "name": "Class Participation",
+          "weight": 30
+        },
+        {
+          "name": "Discussion Posts",
+          "weight": 10
+        },
+        {
+          "name": "Midterm",
+          "weight": 15
+        },
+        {
+          "name": "Final Project",
+          "weight": 30
+        },
+        {
+          "name": "Final Exam",
+          "weight": 15
+        }
+      ],
+      "grades": {
+        "class participation": [
+          90
+        ],
+        "discussion posts": [
+          100
+        ],
+        "midterm": [
+          96
+        ],
+        "final project": [
+          94
+        ],
+        "final exam": [
+          89.2
+        ]
+      },
+      "classAverages": {},
+      "curve": {
+        "type": "none"
+      },
+      "canvasSynced": true,
+      "canvasId": 235980,
+      "canvasAssignmentMap": {}
+    },
+    "accounting": {
+      "name": "Accounting",
+      "categories": [
+        {
+          "name": "Homework",
+          "weight": 20
+        },
+        {
+          "name": "Midterm Exam I",
+          "weight": 25
+        },
+        {
+          "name": "Midterm Exam II",
+          "weight": 25
+        },
+        {
+          "name": "Final Project",
+          "weight": 30
+        },
+        {
+          "name": "Class Participation",
+          "weight": 5
+        }
+      ],
+      "grades": {
+        "homework": [
+          96,
+          96,
+          100,
+          100,
+          97,
+          100,
+          99,
+          99
+        ],
+        "midterm exam i": [
+          100
+        ],
+        "midterm exam ii": [
+          100
+        ],
+        "final project": [
+          96
+        ],
+        "class participation": [
+          100
+        ]
+      },
+      "classAverages": {},
+      "curve": {
+        "type": "none"
+      },
+      "canvasSynced": true,
+      "canvasId": 232621,
+      "canvasAssignmentMap": {
+        "1528659": "homework",
+        "1533219": "homework",
+        "1536976": "homework",
+        "1539922": "homework",
+        "1545131": "midterm exam i",
+        "1547680": "homework",
+        "1550614": "homework",
+        "1552493": "homework",
+        "1563007": "midterm exam ii",
+        "1566341": "homework",
+        "1566640": "final project",
+        "1584378": "class participation",
+        "1584388": null
+      }
+    }
+  },
+  "userStates": {
+    "+18453908436": {
+      "step": "idle",
+      "pendingClass": null
+    }
+  },
+  "config": {
+    "canvasSetupAsked": false,
+    "canvasConnected": true
+  },
+  "lastAction": {
+    "type": "canvas_linked",
+    "classKey": "accounting",
+    "className": "Accounting",
+    "previousClassData": {
+      "name": "Accounting",
+      "categories": [
+        {
+          "name": "Homework",
+          "weight": 20
+        },
+        {
+          "name": "Midterm Exam I",
+          "weight": 25
+        },
+        {
+          "name": "Midterm Exam II",
+          "weight": 25
+        },
+        {
+          "name": "Final Project",
+          "weight": 30
+        },
+        {
+          "name": "Class Participation",
+          "weight": 5
+        }
+      ],
+      "grades": {
+        "homework": [],
+        "midterm exam i": [],
+        "midterm exam ii": [],
+        "final project": [],
+        "class participation": []
+      },
+      "classAverages": {},
+      "curve": {
+        "type": "none"
+      },
+      "canvasSynced": false,
+      "canvasId": null,
+      "canvasAssignmentMap": {}
+    },
+    "timestamp": "2026-06-01T20:05:30.315Z"
+  }
+}
