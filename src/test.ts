@@ -7,15 +7,27 @@
 //   3. Input parsing      — natural language → correct intent / state
 //   4. Edge cases         — boundary conditions and unusual inputs
 
+// Must be set before any imports so db.ts picks it up
+process.env.DB_PATH = ':memory:';
 process.env.TEST_MODE = 'true';
 process.env.MY_PHONE = process.env.MY_PHONE || '+10000000000';
 
 import assert from 'assert';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { calcCurrentGrade, calcNeeded, calcBestPossible, calcGPA } from './grades.js';
-import type { ClassData, Curve, DynamicWeights } from './types.js';
+import type { ClassData, Curve, DynamicWeights, PendingConfirmation } from './types.js';
 
 const { handleIncomingMessage } = await import('./bot.js');
+
+import { dbResetUser } from './db.js';
+import {
+  getClass,
+  getUserState,
+  getLastAction,
+  saveClass,
+  setUserState,
+  setPendingConfirmation,
+  saveLastAction,
+} from './storage.js';
 
 // ── Test harness ─────────────────────────────────────────────────────────────
 
@@ -50,36 +62,26 @@ async function testA(desc: string, fn: () => Promise<void>): Promise<void> {
 
 // ── Data helpers ─────────────────────────────────────────────────────────────
 
-const DATA_FILE = './classes.json';
 const FROM = process.env.MY_PHONE as string;
 
 function reset(): void {
-  if (existsSync(DATA_FILE)) unlinkSync(DATA_FILE);
-}
-
-function getData(): { classes: Record<string, ClassData>; userStates: Record<string, { step: string; pendingClass: string | null; pendingConfirmation?: unknown }>; config: Record<string, unknown> } {
-  if (!existsSync(DATA_FILE)) return { classes: {}, userStates: {}, config: {} };
-  return JSON.parse(readFileSync(DATA_FILE, 'utf8')) as ReturnType<typeof getData>;
+  dbResetUser(FROM);
 }
 
 function getClassData(key: string): ClassData | null {
-  return getData().classes[key.toLowerCase()] ?? null;
+  return getClass(FROM, key.toLowerCase());
 }
 
-function getPending(): { type: string; data: Record<string, unknown>; question: string } | null {
-  return (getData().userStates?.[FROM]?.pendingConfirmation ?? null) as ReturnType<typeof getPending>;
+function getPending(): PendingConfirmation | undefined {
+  return getUserState(FROM).pendingConfirmation;
 }
 
 function getStep(): string {
-  return getData().userStates?.[FROM]?.step ?? 'idle';
+  return getUserState(FROM).step;
 }
 
-function setPendingDirectly(pendingConfirmation: unknown): void {
-  const data = getData();
-  data.userStates = data.userStates || {};
-  data.userStates[FROM] = data.userStates[FROM] || { step: 'idle', pendingClass: null };
-  data.userStates[FROM].pendingConfirmation = pendingConfirmation;
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+function setPendingDirectly(pc: PendingConfirmation): void {
+  setPendingConfirmation(FROM, pc);
 }
 
 // Suppress bot console output during conversation tests
@@ -128,9 +130,6 @@ function mkClass({ categories, grades = {}, canvasGrades = {}, curve = { type: '
   return { name: 'Test', categories, grades, canvasGrades, classAverages: {}, curve, dynamicWeights };
 }
 
-// ── Backup real data ─────────────────────────────────────────────────────────
-
-const backup = existsSync(DATA_FILE) ? readFileSync(DATA_FILE, 'utf8') : null;
 reset();
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -636,18 +635,16 @@ await testA('awaiting_numeric_median — plain number saves median + letter', as
   await say('Homework 50%, Final 50%');
   await say('3'); await say('no');
   unmute();
-  // Directly inject the pending state (bypasses Claude in TEST_MODE)
-  const data = getData();
-  data.classes['ds'].curve = { type: 'norm' };
-  data.userStates = data.userStates || {};
-  data.userStates[FROM] = { step: 'idle', pendingClass: null,
-    pendingConfirmation: { type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' },
-  };
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  // Directly inject the pending state via storage functions
+  const cd = getClass(FROM, 'ds')!;
+  cd.curve = { type: 'norm' };
+  saveClass(FROM, 'ds', cd);
+  setUserState(FROM, { step: 'idle', pendingClass: null });
+  setPendingDirectly({ type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' });
   mute(); await say('72'); unmute();
-  const cd = getClassData('ds');
-  assert.strictEqual(cd!.curve.median, 72);
-  assert.strictEqual(cd!.curve.mappedGrade, 'B+');
+  const cd2 = getClassData('ds');
+  assert.strictEqual(cd2!.curve.median, 72);
+  assert.strictEqual(cd2!.curve.mappedGrade, 'B+');
 });
 
 await testA('awaiting_numeric_median — "skip" saves letter only, no median', async () => {
@@ -656,17 +653,15 @@ await testA('awaiting_numeric_median — "skip" saves letter only, no median', a
   await say('Homework 50%, Final 50%');
   await say('3'); await say('no');
   unmute();
-  const data = getData();
-  data.classes['ds'].curve = { type: 'norm' };
-  data.userStates = data.userStates || {};
-  data.userStates[FROM] = { step: 'idle', pendingClass: null,
-    pendingConfirmation: { type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' },
-  };
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  const cd = getClass(FROM, 'ds')!;
+  cd.curve = { type: 'norm' };
+  saveClass(FROM, 'ds', cd);
+  setUserState(FROM, { step: 'idle', pendingClass: null });
+  setPendingDirectly({ type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' });
   mute(); await say('skip'); unmute();
-  const cd = getClassData('ds');
-  assert.strictEqual(cd!.curve.mappedGrade, 'B+');
-  assert.ok(cd!.curve.median == null, 'median should not be set');
+  const cd2 = getClassData('ds');
+  assert.strictEqual(cd2!.curve.mappedGrade, 'B+');
+  assert.ok(cd2!.curve.median == null, 'median should not be set');
 });
 
 await testA('awaiting_numeric_median — non-number re-prompts without clearing state', async () => {
@@ -675,13 +670,11 @@ await testA('awaiting_numeric_median — non-number re-prompts without clearing 
   await say('Homework 50%, Final 50%');
   await say('3'); await say('no');
   unmute();
-  const data = getData();
-  data.classes['ds'].curve = { type: 'norm' };
-  data.userStates = data.userStates || {};
-  data.userStates[FROM] = { step: 'idle', pendingClass: null,
-    pendingConfirmation: { type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' },
-  };
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  const cd = getClass(FROM, 'ds')!;
+  cd.curve = { type: 'norm' };
+  saveClass(FROM, 'ds', cd);
+  setUserState(FROM, { step: 'idle', pendingClass: null });
+  setPendingDirectly({ type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' });
   mute(); await say('not a number'); unmute();
   // State should still have the pending confirmation
   const pc = getPending();
@@ -693,17 +686,14 @@ await testA('Canvas resync offer — undo canvas link triggers resync question',
   reset(); mute();
   await setupClass('Bio 101');
   unmute();
-  // Simulate a canvas_linked last action
-  const data = getData();
-  data.classes['bio 101'].lastSyncedAt = undefined as unknown as string;
-  (data as unknown as { lastAction: unknown }).lastAction = {
+  // Simulate a canvas_linked last action via storage
+  const cd = getClass(FROM, 'bio 101')!;
+  saveLastAction(FROM, {
     type: 'canvas_linked',
     classKey: 'bio 101',
     className: 'Bio 101',
-    previousClassData: data.classes['bio 101'],
-    timestamp: new Date().toISOString(),
-  };
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    previousClassData: cd,
+  });
   mute(); await say('undo'); await say('yes'); unmute();
   const pc = getPending();
   assert.ok(pc, 'should offer resync');
@@ -884,7 +874,9 @@ await testA('Reset 1 clears all classes', async () => {
   await say('reset');
   await say('1');
   unmute();
-  assert.strictEqual(Object.keys(getData().classes).length, 0);
+  // After resetClasses, no classes for this phone
+  const cd = getClassData('bio 101');
+  assert.ok(!cd, 'class should be gone after reset 1');
 });
 
 await testA('Delete class with confirmation yes removes it', async () => {
@@ -910,14 +902,14 @@ await testA('Canvas sync does not wipe manual grades', async () => {
   await setupClass('Bio 101');
   await say('got 85 on bio midterm');
   unmute();
-  // Simulate a canvas sync writing to canvasGrades (not grades)
-  const data = getData();
-  data.classes['bio 101'].canvasGrades = { homework: [90] };
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  // Simulate a canvas sync writing to canvasGrades (not grades) via storage
+  const cd = getClass(FROM, 'bio 101')!;
+  cd.canvasGrades = { homework: [90] };
+  saveClass(FROM, 'bio 101', cd);
   // Manual grade in grades.midterm should still be there
-  const cd = getClassData('bio 101');
-  assert.ok((cd!.grades?.midterm ?? []).includes(85), 'manual grade should survive canvas write');
-  assert.deepStrictEqual(cd!.canvasGrades?.homework, [90]);
+  const cd2 = getClassData('bio 101');
+  assert.ok((cd2!.grades?.midterm ?? []).includes(85), 'manual grade should survive canvas write');
+  assert.deepStrictEqual(cd2!.canvasGrades?.homework, [90]);
 });
 
 test('Norm curve letter-only — calcBestPossible still works', () => {
@@ -1047,10 +1039,10 @@ await testA('Norm letter-only: grade display says Curved: not Curve pending', as
   await say('3'); await say('no');
   await say('got 85 on ds homework');
   unmute();
-  // Inject letter-only norm curve state
-  const data = getData();
-  data.classes['ds'].curve = { type: 'norm', mappedGrade: 'B+' };
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  // Inject letter-only norm curve state via storage
+  const cd = getClass(FROM, 'ds')!;
+  cd.curve = { type: 'norm', mappedGrade: 'B+' };
+  saveClass(FROM, 'ds', cd);
   const msgs = await capture(async () => { await say("what's my grade in ds"); });
   const hasGrade = msgs.some(m => m.includes('Curved:') && m.includes('B+'));
   const hasPending = msgs.some(m => m.includes('Curve pending'));
@@ -1064,13 +1056,11 @@ await testA('awaiting_numeric_median skip → hint message includes how to set l
   await say('Homework 50%, Final 50%');
   await say('3'); await say('no');
   unmute();
-  const data = getData();
-  data.classes['ds'].curve = { type: 'norm' };
-  data.userStates = data.userStates || {};
-  data.userStates[FROM] = { step: 'idle', pendingClass: null,
-    pendingConfirmation: { type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' },
-  };
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  const cd = getClass(FROM, 'ds')!;
+  cd.curve = { type: 'norm' };
+  saveClass(FROM, 'ds', cd);
+  setUserState(FROM, { step: 'idle', pendingClass: null });
+  setPendingDirectly({ type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' });
   const msgs = await capture(async () => { await say('skip'); });
   const hasHint = msgs.some(m => m.includes('class median was') || m.includes('median'));
   assert.ok(hasHint, `expected hint about setting median later, got: ${JSON.stringify(msgs)}`);
@@ -1142,13 +1132,6 @@ await testA('Multi-grade message with two grades saves both', async () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Restore real data
-if (backup) {
-  writeFileSync(DATA_FILE, backup);
-} else if (existsSync(DATA_FILE)) {
-  unlinkSync(DATA_FILE);
-}
-
 // Summary
 const total = passed + failed;
 process.stdout.write(`\n${'═'.repeat(50)}\n`);

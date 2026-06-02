@@ -10,3 +10,6 @@ node_modules/
 sendblue-starter/
 
 dist/
+
+# SQLite database
+data/

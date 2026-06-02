@@ -1,143 +1,98 @@
-// storage.ts — Read and write all data to classes.json, and write to .env
-//
-// Data shape in classes.json:
-// {
-//   "classes": {
-//     "bio 101": {
-//       "name": "Bio 101",
-//       "categories": [ { "name": "Midterm", "weight": 30 } ],
-//       "grades": { "midterm": [85, 88] },
-//       "classAverages": { "midterm": 71 },
-//       "curve": { "type": "mean", "targetMean": 75 },
-//       "canvasSynced": false          // true if imported from Canvas
-//     }
-//   },
-//   "userStates": {
-//     "+12025551234": { "step": "idle", "pendingClass": null }
-//   },
-//   "config": {
-//     "canvasSetupAsked": false,       // whether we've shown the Canvas onboarding prompt
-//     "canvasConnected": false
-//   }
-// }
+// storage.ts — Delegates all data operations to db.ts.
+// To swap the backing store (e.g. to Supabase), replace db.ts only.
+// setEnvVar still writes to .env — it is not user data.
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import type { StorageData, ClassData, UserState, Config, LastAction, LastActionInput, PendingConfirmation } from './types.js';
+import type { ClassData, UserState, Config, LastAction, PendingConfirmation } from './types.js';
+import type { DistributiveOmit } from './types.js';
+import {
+  dbGetUserState,
+  dbSetUserState,
+  dbSetPendingConfirmation,
+  dbClearPendingConfirmation,
+  dbGetAllClasses,
+  dbGetClass,
+  dbSaveClass,
+  dbDeleteClass,
+  dbGetConfig,
+  dbSaveConfig,
+  dbSaveLastAction,
+  dbGetLastAction,
+  dbClearLastAction,
+  dbResetClasses,
+  dbResetAll,
+} from './db.js';
 
-const DATA_FILE = './classes.json';
 const ENV_FILE = './.env';
-
-const DEFAULT: StorageData = { classes: {}, userStates: {}, config: { canvasSetupAsked: false, canvasConnected: false } };
-
-function load(): StorageData {
-  if (!existsSync(DATA_FILE)) return structuredClone(DEFAULT);
-  try {
-    return JSON.parse(readFileSync(DATA_FILE, 'utf8')) as StorageData;
-  } catch {
-    return structuredClone(DEFAULT);
-  }
-}
-
-function save(data: StorageData): void {
-  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-// ---- Config (top-level settings) ----
-
-export function getConfig(): Config {
-  const data = load();
-  // Defaults for any missing fields
-  const defaults: Config = { canvasSetupAsked: false, canvasConnected: false };
-  return { ...defaults, ...(data.config || {}) };
-}
-
-export function saveConfig(config: Config): void {
-  const data = load();
-  data.config = config;
-  save(data);
-}
 
 // ---- User state ----
 
 export function getUserState(phone: string): UserState {
-  return load().userStates[phone] || { step: 'idle', pendingClass: null };
+  return dbGetUserState(phone);
 }
 
 export function setUserState(phone: string, state: UserState): void {
-  const data = load();
-  data.userStates[phone] = state;
-  save(data);
+  dbSetUserState(phone, state);
 }
 
-// Write pendingConfirmation without touching step/pendingClass.
-// Use this whenever the bot asks a choice question — it's a guaranteed
-// atomic write that cannot be silently overwritten by a setUserState
-// call that doesn't carry the pendingConfirmation field forward.
-export function setPendingConfirmation(phone: string, confirmation: PendingConfirmation): void {
-  const data = load();
-  const existing: UserState = data.userStates[phone] || { step: 'idle', pendingClass: null };
-  existing.pendingConfirmation = confirmation;
-  data.userStates[phone] = existing;
-  save(data);
+export function setPendingConfirmation(phone: string, pc: PendingConfirmation): void {
+  dbSetPendingConfirmation(phone, pc);
 }
 
 export function clearPendingConfirmation(phone: string): void {
-  const data = load();
-  const existing: UserState = data.userStates[phone] || { step: 'idle', pendingClass: null };
-  delete existing.pendingConfirmation;
-  data.userStates[phone] = existing;
-  save(data);
+  dbClearPendingConfirmation(phone);
 }
 
 // ---- Classes ----
 
-export function getAllClasses(): Record<string, ClassData> {
-  return load().classes;
+export function getAllClasses(phone: string): Record<string, ClassData> {
+  return dbGetAllClasses(phone);
 }
 
-export function getClass(key: string): ClassData | null {
-  return load().classes[key] || null;
+export function getClass(phone: string, key: string): ClassData | null {
+  return dbGetClass(phone, key);
 }
 
-export function saveClass(key: string, classData: ClassData): void {
-  const data = load();
-  data.classes[key] = classData;
-  save(data);
+export function saveClass(phone: string, key: string, classData: ClassData): void {
+  dbSaveClass(phone, key, classData);
 }
 
-export function deleteClass(key: string): void {
-  const data = load();
-  delete data.classes[key];
-  save(data);
+export function deleteClass(phone: string, key: string): void {
+  dbDeleteClass(phone, key);
+}
+
+// ---- Config ----
+
+export function getConfig(phone: string): Config {
+  return dbGetConfig(phone);
+}
+
+export function saveConfig(phone: string, config: Config): void {
+  dbSaveConfig(phone, config);
 }
 
 // ---- Last action (for undo) ----
 
-export function saveLastAction(action: LastActionInput): void {
-  const data = load();
-  data.lastAction = { ...action, timestamp: new Date().toISOString() } as LastAction;
-  save(data);
+export function saveLastAction(phone: string, action: DistributiveOmit<LastAction, 'timestamp'>): void {
+  dbSaveLastAction(phone, action);
 }
 
-export function getLastAction(): LastAction | null {
-  return load().lastAction || null;
+export function getLastAction(phone: string): LastAction | null {
+  return dbGetLastAction(phone);
 }
 
-export function clearLastAction(): void {
-  const data = load();
-  delete data.lastAction;
-  save(data);
+export function clearLastAction(phone: string): void {
+  dbClearLastAction(phone);
 }
 
-export function resetClasses(): void {
-  const data = load();
-  data.classes = {};
-  data.userStates = {};
-  save(data);
+// ---- Reset ----
+
+export function resetClasses(phone: string): void {
+  dbResetClasses(phone);
 }
 
-export function resetAll(): void {
-  save(structuredClone(DEFAULT));
+export function resetAll(phone: string): void {
+  dbResetAll(phone);
 }
 
 // ---- .env writer ----------------------------------------------------------------

@@ -100,7 +100,7 @@ export async function handleIncomingMessage(from: string, text: string, mediaUrl
     return;
   }
 
-  const classes = getAllClasses();
+  const classes = getAllClasses(from);
   const intent = await classifyIntent(trimmed, classes);
   await handleIntent(from, trimmed, intent);
 }
@@ -147,10 +147,10 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
         return;
       }
       // norm or none — no extra setup needed now; norm data is entered per-assignment
-      const cdCurve = getClass(className.toLowerCase());
+      const cdCurve = getClass(from, className.toLowerCase());
       if (cdCurve) {
         cdCurve.curve = { type: curveType as 'norm' | 'none' };
-        saveClass(className.toLowerCase(), cdCurve);
+        saveClass(from, className.toLowerCase(), cdCurve);
       }
       const curveNote = curveType === 'norm'
         ? "Norm-referenced curve saved. When you enter class medians later, I'll ask what letter grade the prof maps the median to."
@@ -162,7 +162,7 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
     case 'canvas_choice': {
       const className = pc.data.className as string;
       if (isYes) {
-        const config = getConfig();
+        const config = getConfig(from);
         if (config.canvasConnected && process.env.CANVAS_TOKEN && process.env.CANVAS_BASE_URL) {
           await pickCanvasCourse(from, className);
         } else {
@@ -172,7 +172,7 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
       } else {
         setUserState(from, { step: 'idle', pendingClass: null });
         const classKey = className.toLowerCase();
-        const hasGrades = Object.values(getClass(classKey)?.grades || {}).some(arr => arr.length > 0);
+        const hasGrades = Object.values(getClass(from, classKey)?.grades || {}).some(arr => arr.length > 0);
         if (hasGrades) {
           await showGrade(from, classKey);
         } else {
@@ -208,18 +208,18 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
       }
 
       const classKey = className.toLowerCase();
-      const preCanvasData = JSON.parse(JSON.stringify(getClass(classKey))) as ClassData;
-      const cdCanvas = getClass(classKey);
+      const preCanvasData = JSON.parse(JSON.stringify(getClass(from, classKey))) as ClassData;
+      const cdCanvas = getClass(from, classKey);
       if (!cdCanvas) break;
       cdCanvas.canvasId = selectedCourse.id;
       cdCanvas.canvasSynced = true;
       cdCanvas.canvasAssignmentMap = cdCanvas.canvasAssignmentMap || {};
-      saveClass(classKey, cdCanvas);
+      saveClass(from, classKey, cdCanvas);
       setUserState(from, { step: 'idle', pendingClass: null });
 
       await sendMessage(from, `Linked to "${selectedCourse.name}". Pulling scores...`);
       await performCanvasSync(from, [classKey]);
-      saveLastAction({ type: 'canvas_linked', classKey, className: cdCanvas.name, previousClassData: preCanvasData });
+      saveLastAction(from, { type: 'canvas_linked', classKey, className: cdCanvas.name, previousClassData: preCanvasData });
       break;
     }
 
@@ -242,9 +242,9 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
     case 'confirm_delete': {
       const classKey = pc.data.classKey as string;
       if (isYes) {
-        const cdDel = getClass(classKey);
+        const cdDel = getClass(from, classKey);
         const displayName = cdDel?.name || classKey;
-        deleteClass(classKey);
+        deleteClass(from, classKey);
         setUserState(from, { step: 'idle', pendingClass: null });
         await sendMessage(from, `${displayName} deleted.`);
       } else {
@@ -257,11 +257,11 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
     case 'confirm_reset': {
       const t = answer.trim();
       if (t === '1' || isYes) {
-        resetClasses();
+        resetClasses(from);
         setUserState(from, { step: 'idle', pendingClass: null });
         await sendMessage(from, 'Done — all classes and grades deleted. Canvas is still connected. Start fresh with "new class: [name]".');
       } else if (t === '2') {
-        resetAll();
+        resetAll(from);
         setEnvVar('CANVAS_TOKEN', '');
         setEnvVar('CANVAS_BASE_URL', '');
         setUserState(from, { step: 'idle', pendingClass: null });
@@ -284,7 +284,7 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
       } else {
         // Re-classify as a fresh message
         setUserState(from, { step: 'idle', pendingClass: null });
-        const classes = getAllClasses();
+        const classes = getAllClasses(from);
         const freshIntent = await classifyIntent(answer, classes);
         await handleIntent(from, answer, freshIntent);
       }
@@ -303,12 +303,12 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
         return;
       }
 
-      const cdNorm = getClass(classKey);
+      const cdNorm = getClass(from, classKey);
       if (!cdNorm) break;
       const previousMappedGrade = cdNorm.curve?.mappedGrade ?? null;
       cdNorm.curve = { ...cdNorm.curve, mappedGrade: letter };
-      saveClass(classKey, cdNorm);
-      saveLastAction({ type: 'norm_grade_saved', classKey, className: cdNorm.name, previousValue: previousMappedGrade ?? null, newValue: letter });
+      saveClass(from, classKey, cdNorm);
+      saveLastAction(from, { type: 'norm_grade_saved', classKey, className: cdNorm.name, previousValue: previousMappedGrade ?? null, newValue: letter });
 
       await sendMessage(from, `Got it — class median ${median} maps to ${letter} for ${cdNorm.name}.`);
       await showGrade(from, classKey);
@@ -318,7 +318,7 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
     case 'awaiting_numeric_median': {
       const classKey = pc.data.classKey as string;
       const letter = pc.data.letter as string;
-      const cdNorm = getClass(classKey);
+      const cdNorm = getClass(from, classKey);
       if (!cdNorm) break;
 
       const lower2 = answer.toLowerCase().trim();
@@ -327,12 +327,12 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
 
       if (isSkip) {
         cdNorm.curve = { ...cdNorm.curve, mappedGrade: letter };
-        saveClass(classKey, cdNorm);
+        saveClass(from, classKey, cdNorm);
         await sendMessage(from, `Got it — target grade is ${letter} for ${cdNorm.name}. If you get the numeric median later just text it like: "class median was 72 for ${cdNorm.name.toLowerCase()}"`);
         await showGrade(from, classKey);
       } else if (!isNaN(median)) {
         cdNorm.curve = { ...cdNorm.curve, median, mappedGrade: letter };
-        saveClass(classKey, cdNorm);
+        saveClass(from, classKey, cdNorm);
         await sendMessage(from, `Got it — class median ${median} maps to ${letter} for ${cdNorm.name}.`);
         await showGrade(from, classKey);
       } else {
@@ -346,11 +346,11 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
     case 'norm_median_confirm': {
       const classKey = pc.data.classKey as string;
       const letter = pc.data.letter as string;
-      const cdNorm = getClass(classKey);
+      const cdNorm = getClass(from, classKey);
       if (!cdNorm) break;
       if (isYes) {
         cdNorm.curve = { ...cdNorm.curve, mappedGrade: letter };
-        saveClass(classKey, cdNorm);
+        saveClass(from, classKey, cdNorm);
         await sendMessage(from, `Got it — target grade is ${letter} for ${cdNorm.name}.`);
         await showGrade(from, classKey);
       } else {
@@ -369,10 +369,10 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
         await sendMessage(from, 'Enter a number for the median (e.g. 72).');
         return;
       }
-      const cdNorm = getClass(classKey);
+      const cdNorm = getClass(from, classKey);
       if (!cdNorm) break;
       cdNorm.curve = { ...cdNorm.curve, median, mappedGrade: letter };
-      saveClass(classKey, cdNorm);
+      saveClass(from, classKey, cdNorm);
       await sendMessage(from, `Got it — class median ${median} maps to ${letter} for ${cdNorm.name}.`);
       await showGrade(from, classKey);
       break;
@@ -385,23 +385,23 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
       }
 
       const last = pc.data.last as LastAction;
-      clearLastAction();
+      clearLastAction(from);
 
       switch (last.type) {
         case 'grade_saved': {
-          const cd = getClass(last.classKey);
-          if (cd) { cd.grades[last.catKey] = last.previousGrades; saveClass(last.classKey, cd); }
+          const cd = getClass(from, last.classKey);
+          if (cd) { cd.grades[last.catKey] = last.previousGrades; saveClass(from, last.classKey, cd); }
           await sendMessage(from, `Undone — removed ${last.catDisplay} grade of ${last.score} from ${last.className}.`);
           break;
         }
         case 'grade_deleted': {
-          const cd = getClass(last.classKey);
-          if (cd) { cd.grades[last.catKey] = last.previousGrades; saveClass(last.classKey, cd); }
+          const cd = getClass(from, last.classKey);
+          if (cd) { cd.grades[last.catKey] = last.previousGrades; saveClass(from, last.classKey, cd); }
           await sendMessage(from, `Undone — restored ${last.catDisplay} grade of ${last.removedScore} in ${last.className}.`);
           break;
         }
         case 'class_average_saved': {
-          const cd = getClass(last.classKey);
+          const cd = getClass(from, last.classKey);
           if (cd) {
             if (last.field === 'curve.classAvg') {
               if (last.previousValue == null) { delete cd.curve.classAvg; } else { cd.curve = { ...cd.curve, classAvg: last.previousValue }; }
@@ -412,32 +412,32 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
               if (!cd.classAverages) cd.classAverages = {};
               if (last.previousValue == null) { delete cd.classAverages[catKey]; } else { cd.classAverages[catKey] = last.previousValue; }
             }
-            saveClass(last.classKey, cd);
+            saveClass(from, last.classKey, cd);
           }
           await sendMessage(from, `Undone — removed ${last.label || 'class average'} for ${last.className}.`);
           break;
         }
         case 'norm_grade_saved': {
-          const cd = getClass(last.classKey);
+          const cd = getClass(from, last.classKey);
           if (cd) {
             if (last.previousValue == null) { delete cd.curve.mappedGrade; } else { cd.curve = { ...cd.curve, mappedGrade: last.previousValue }; }
-            saveClass(last.classKey, cd);
+            saveClass(from, last.classKey, cd);
           }
           await sendMessage(from, `Undone — removed norm curve letter grade for ${last.className}.`);
           break;
         }
         case 'class_added': {
-          deleteClass(last.classKey);
+          deleteClass(from, last.classKey);
           await sendMessage(from, `Undone — deleted ${last.className}.`);
           break;
         }
         case 'syllabus_updated': {
-          saveClass(last.classKey, last.previousClassData);
+          saveClass(from, last.classKey, last.previousClassData);
           await sendMessage(from, `Undone — restored previous syllabus weights for ${last.className}.`);
           break;
         }
         case 'canvas_linked': {
-          saveClass(last.classKey, last.previousClassData);
+          saveClass(from, last.classKey, last.previousClassData);
           await sendMessage(from, `Undone — unlinked Canvas from ${last.className} and restored previous grades.`);
           const resyncQ = `Want to re-sync Canvas for ${last.className}? (yes/no)`;
           setPendingConfirmation(from, { type: 'canvas_resync_offer', data: { classKey: last.classKey, className: last.className }, question: resyncQ });
@@ -465,12 +465,12 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
       const classKey = pc.data.classKey as string;
       const num = pc.data.num as number;
       if (isYes) {
-        const cd = getClass(classKey);
+        const cd = getClass(from, classKey);
         if (!cd) break;
         const previousValue = cd.curve?.median ?? null;
         cd.curve = { ...cd.curve, median: num };
-        saveClass(classKey, cd);
-        saveLastAction({ type: 'class_average_saved', classKey, className: cd.name, field: 'curve.median', previousValue, newValue: num, label: 'class median' });
+        saveClass(from, classKey, cd);
+        saveLastAction(from, { type: 'class_average_saved', classKey, className: cd.name, field: 'curve.median', previousValue, newValue: num, label: 'class median' });
         await sendMessage(from, `Saved — class median ${num} for ${cd.name}.`);
         if (!cd.curve.mappedGrade) {
           const q = `What letter grade does the professor map that median to for ${cd.name}? (e.g. B+)`;
@@ -509,12 +509,12 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
       }
 
       const { classKey: chosenKey, name: chosenName } = selected;
-      const cd = getClass(chosenKey);
+      const cd = getClass(from, chosenKey);
       if (!cd) break;
       const previousValue = cd.curve?.median ?? null;
       cd.curve = { ...cd.curve, median: num };
-      saveClass(chosenKey, cd);
-      saveLastAction({ type: 'class_average_saved', classKey: chosenKey, className: chosenName, field: 'curve.median', previousValue, newValue: num, label: 'class median' });
+      saveClass(from, chosenKey, cd);
+      saveLastAction(from, { type: 'class_average_saved', classKey: chosenKey, className: chosenName, field: 'curve.median', previousValue, newValue: num, label: 'class median' });
       await sendMessage(from, `Saved — class median ${num} for ${chosenName}.`);
       if (!cd.curve.mappedGrade) {
         const q = `What letter grade does the professor map that median to for ${chosenName}? (e.g. B+)`;
@@ -529,7 +529,7 @@ async function handlePendingConfirmation(from: string, pc: PendingConfirmation, 
 
     case 'manual_entry_offer': {
       const classKey = pc.data.classKey as string;
-      const className = getClass(classKey)?.name || classKey;
+      const className = getClass(from, classKey)?.name || classKey;
       setUserState(from, { step: 'idle', pendingClass: null });
       if (isYes) {
         await sendMessage(from, `Sure — text your grade like:\n"got an 88 on the midterm for ${className}"`);
@@ -643,7 +643,7 @@ async function handleSetupFlow(from: string, text: string, state: UserState): Pr
 
   if (isEscape && step !== 'awaiting_canvas_url' && step !== 'awaiting_canvas_token') {
     setUserState(from, { step: 'idle', pendingClass: null });
-    const classes = getAllClasses();
+    const classes = getAllClasses(from);
     const intent = await classifyIntent(text, classes);
     await handleIntent(from, text, intent);
     return;
@@ -676,10 +676,10 @@ async function handleSetupFlow(from: string, text: string, state: UserState): Pr
     }
 
     const classKey = (pendingClass || '').toLowerCase();
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) return;
     classData.curve = { type: 'flat', flatPoints: points };
-    saveClass(classKey, classData);
+    saveClass(from, classKey, classData);
 
     await offerCanvas(from, pendingClass || '', `+${points} pts added to all scores.`);
     return;
@@ -699,10 +699,10 @@ async function handleSetupFlow(from: string, text: string, state: UserState): Pr
     }
 
     const classKey = (pendingClass || '').toLowerCase();
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) return;
     classData.curve = { type: 'mean', targetMean };
-    saveClass(classKey, classData);
+    saveClass(from, classKey, classData);
 
     const note =
       targetMean !== null
@@ -740,7 +740,7 @@ async function handleSetupFlow(from: string, text: string, state: UserState): Pr
       await getCourses(baseUrl || '', token); // throws CANVAS_AUTH_ERROR on bad token
       setEnvVar('CANVAS_TOKEN', token);
       setEnvVar('CANVAS_BASE_URL', baseUrl || '');
-      saveConfig({ ...getConfig(), canvasConnected: true });
+      saveConfig(from, { ...getConfig(from), canvasConnected: true });
 
       // Back to canvas_choice but now connected — pick a course
       await pickCanvasCourse(from, className || '');
@@ -775,7 +775,7 @@ async function handleSetupFlow(from: string, text: string, state: UserState): Pr
       return;
     }
 
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       setUserState(from, { step: 'idle', pendingClass: null });
       return;
@@ -791,7 +791,7 @@ async function handleSetupFlow(from: string, text: string, state: UserState): Pr
     if (lowerClass === 'skip') {
       if (!classData.canvasAssignmentMap) classData.canvasAssignmentMap = {};
       classData.canvasAssignmentMap[current.id] = null;
-      saveClass(classKey, classData);
+      saveClass(from, classKey, classData);
     } else {
       const catKey = findCategoryKey(classData, classificationText);
       if (!catKey) {
@@ -804,12 +804,12 @@ async function handleSetupFlow(from: string, text: string, state: UserState): Pr
       classData.canvasGrades = classData.canvasGrades || {};
       classData.canvasGrades[catKey] = classData.canvasGrades[catKey] || [];
       classData.canvasGrades[catKey].push(current.percentage);
-      saveClass(classKey, classData);
+      saveClass(from, classKey, classData);
     }
 
     // Process any additional content in the same message
     if (remainderText) {
-      const extraClasses = getAllClasses();
+      const extraClasses = getAllClasses(from);
       const extraIntent = await classifyIntent(remainderText, extraClasses);
       if (extraIntent.action !== 'unknown') {
         await handleIntent(from, remainderText, extraIntent);
@@ -851,7 +851,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       intent.intents.filter((i): i is Extract<Intent, { classKey: string }> => 'classKey' in i && !!i.classKey).map(i => i.classKey)
     )];
     for (const batchKey of batchClassKeys) {
-      const bcd = getClass(batchKey);
+      const bcd = getClass(from, batchKey);
       // For norm curves: if median was just set but mapped grade is missing, ask once
       if (bcd?.curve?.type === 'norm' && bcd.curve.median != null && !bcd.curve.mappedGrade) {
         const q = `What letter grade does the professor map the class median to for ${bcd.name}? (e.g. B+)`;
@@ -874,7 +874,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
     }
 
     const classKey = className.toLowerCase();
-    const existing = getClass(classKey);
+    const existing = getClass(from, classKey);
     const hasCategories = !!(existing?.categories?.length);
 
     if (hasCategories) {
@@ -893,7 +893,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
   // ── Update syllabus for existing class ────────────────────────────────────
   if (action === 'update_syllabus') {
     const { classKey } = intent;
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       await sendMessage(from, `No class matching that name. Use "new class: [name]" to add it.`);
       return;
@@ -915,7 +915,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       return;
     }
 
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       await sendMessage(from, `No class matching "${classKey}". Use "new class: [name]" to add it.`);
       return;
@@ -936,10 +936,10 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
     const previousGrades = [...(classData.grades[catKey] || [])];
     classData.grades[catKey] = classData.grades[catKey] || [];
     classData.grades[catKey].push(Number(score));
-    saveClass(classKey, classData);
+    saveClass(from, classKey, classData);
 
     const catDisplay = classData.categories.find(c => c.name.toLowerCase() === catKey)?.name || catKey;
-    saveLastAction({ type: 'grade_saved', classKey, className: classData.name, catKey, catDisplay, score: Number(score), previousGrades });
+    saveLastAction(from, { type: 'grade_saved', classKey, className: classData.name, catKey, catDisplay, score: Number(score), previousGrades });
 
     await sendMessage(from, `Saved — ${score} on ${catDisplay} in ${classData.name}.`);
     return;
@@ -954,7 +954,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       return;
     }
 
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       await sendMessage(from, `No class matching "${classKey}".`);
       return;
@@ -965,8 +965,8 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
     if (curveType === 'mean') {
       const previousValue = classData.curve?.classAvg ?? null;
       classData.curve = { ...classData.curve, classAvg: Number(average) };
-      saveClass(classKey, classData);
-      saveLastAction({ type: 'class_average_saved', classKey, className: classData.name, field: 'curve.classAvg', previousValue, newValue: Number(average), label: 'class average' });
+      saveClass(from, classKey, classData);
+      saveLastAction(from, { type: 'class_average_saved', classKey, className: classData.name, field: 'curve.classAvg', previousValue, newValue: Number(average), label: 'class average' });
       await sendMessage(from, `Saved — class average ${average} for ${classData.name}.`);
       if (!intent._batchMode) await showGrade(from, classKey);
       return;
@@ -975,8 +975,8 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
     if (curveType === 'norm') {
       const previousValue = classData.curve?.median ?? null;
       classData.curve = { ...classData.curve, median: Number(average) };
-      saveClass(classKey, classData);
-      saveLastAction({ type: 'class_average_saved', classKey, className: classData.name, field: 'curve.median', previousValue, newValue: Number(average), label: 'class median' });
+      saveClass(from, classKey, classData);
+      saveLastAction(from, { type: 'class_average_saved', classKey, className: classData.name, field: 'curve.median', previousValue, newValue: Number(average), label: 'class median' });
       await sendMessage(from, `Saved — class median ${average} for ${classData.name}.`);
       if (!intent._batchMode) {
         if (!classData.curve.mappedGrade) {
@@ -997,9 +997,9 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       classData.classAverages = classData.classAverages || {};
       const previousValue = classData.classAverages[catKey] ?? null;
       classData.classAverages[catKey] = Number(average);
-      saveClass(classKey, classData);
+      saveClass(from, classKey, classData);
       const catDisplay = classData.categories.find(c => c.name.toLowerCase() === catKey)?.name || catKey;
-      saveLastAction({ type: 'class_average_saved', classKey, className: classData.name, field: `classAverages.${catKey}`, previousValue, newValue: Number(average), label: `${catDisplay} average` });
+      saveLastAction(from, { type: 'class_average_saved', classKey, className: classData.name, field: `classAverages.${catKey}`, previousValue, newValue: Number(average), label: `${catDisplay} average` });
       await sendMessage(from, `Saved — class average of ${average} on ${catDisplay} in ${classData.name}.`);
     } else {
       await sendMessage(from, `${classData.name} has no active curve — class averages don't affect the grade calculation.`);
@@ -1013,7 +1013,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
     let classKey = intent.classKey;
 
     if (!classKey) {
-      const all = getAllClasses();
+      const all = getAllClasses(from);
       const keys = Object.keys(all);
       if (keys.length === 1) {
         classKey = keys[0];
@@ -1047,7 +1047,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       return;
     }
 
-    const canvasClasses = Object.keys(getAllClasses()).filter(k => getClass(k)?.canvasId);
+    const canvasClasses = Object.keys(getAllClasses(from)).filter(k => getClass(from, k)?.canvasId);
     if (canvasClasses.length === 0) {
       await sendMessage(from, 'No classes are linked to Canvas yet. Add a class first — it will ask about Canvas after the syllabus is set up.');
       return;
@@ -1061,7 +1061,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
   // ── Connect Canvas ────────────────────────────────────────────────────────
   if (action === 'connect_canvas') {
     // "connect canvas" with no active class: ask which class they want to link
-    const all = getAllClasses();
+    const all = getAllClasses(from);
     const unlinked = Object.entries(all).filter(([, c]) => !c.canvasId).map(([, c]) => c.name);
 
     if (unlinked.length === 0 && Object.keys(all).length > 0) {
@@ -1090,7 +1090,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
   // ── Delete a class ────────────────────────────────────────────────────────
   if (action === 'delete_class') {
     const { classKey } = intent;
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       await sendMessage(from, 'No class found with that name.');
       return;
@@ -1115,7 +1115,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
 
   // ── Help ──────────────────────────────────────────────────────────────────
   if (action === 'help') {
-    const config = getConfig();
+    const config = getConfig(from);
     const canvasLine = config.canvasConnected
       ? '• "sync canvas" — pull latest scores from Canvas'
       : '• Canvas sync is offered automatically after setting up a new class';
@@ -1139,7 +1139,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
 
   // ── Undo last action ─────────────────────────────────────────────────────
   if (action === 'undo') {
-    const last = getLastAction();
+    const last = getLastAction(from);
     if (!last) {
       await sendMessage(from, 'Nothing to undo yet.');
       return;
@@ -1154,7 +1154,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
 
   // ── Show semester GPA ─────────────────────────────────────────────────────
   if (action === 'show_gpa') {
-    const all = getAllClasses();
+    const all = getAllClasses(from);
     if (Object.keys(all).length === 0) {
       await sendMessage(from, 'No classes yet. Add one with "new class: [name]".');
       return;
@@ -1185,7 +1185,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
   // ── Set credit hours for a class ─────────────────────────────────────────
   if (action === 'set_credits') {
     const { classKey, credits } = intent;
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       await sendMessage(from, `No class matching that name.`);
       return;
@@ -1195,7 +1195,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       return;
     }
     classData.creditHours = Number(credits);
-    saveClass(classKey, classData);
+    saveClass(from, classKey, classData);
     await sendMessage(from, `Set ${classData.name} to ${credits} credit hour${credits !== 1 ? 's' : ''}. Text "my GPA" to see your semester GPA.`);
     return;
   }
@@ -1215,7 +1215,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       return;
     }
 
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       await sendMessage(from, `No class matching "${classKey}".`);
       return;
@@ -1246,7 +1246,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       return;
     }
 
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       await sendMessage(from, `No class matching "${classKey}".`);
       return;
@@ -1287,7 +1287,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
       return;
     }
 
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData) {
       await sendMessage(from, `No class matching "${classKey}".`);
       return;
@@ -1328,10 +1328,10 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
     if (removed === undefined) return;
 
     classData.grades[catKey] = manualGrades;
-    saveClass(classKey, classData);
+    saveClass(from, classKey, classData);
 
     const catDisplay = classData.categories.find(c => c.name.toLowerCase() === catKey)?.name || catKey;
-    saveLastAction({ type: 'grade_deleted', classKey, className: classData.name, catKey, catDisplay, removedScore: removed, previousGrades });
+    saveLastAction(from, { type: 'grade_deleted', classKey, className: classData.name, catKey, catDisplay, removedScore: removed, previousGrades });
 
     await sendMessage(from, `Removed ${removed} from ${catDisplay} in ${classData.name}.`);
     await showGrade(from, classKey);
@@ -1340,7 +1340,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
 
   // ── Manual entry hint ─────────────────────────────────────────────────────
   if (action === 'enter_manually') {
-    const classData = intent.classKey ? getClass(intent.classKey) : null;
+    const classData = intent.classKey ? getClass(from, intent.classKey) : null;
     const className = classData?.name || (intent.classKey ? intent.classKey : null);
     const example = className
       ? `"got an 88 on the midterm for ${className}"`
@@ -1362,7 +1362,7 @@ async function handleIntent(from: string, text: string, intent: Intent): Promise
   // If the message looks like a plain number, check for norm classes missing a median
   const numericInput = parseFloat(text);
   if (!isNaN(numericInput) && numericInput >= 0 && numericInput <= 150 && /^\d+(\.\d+)?$/.test(text)) {
-    const all = getAllClasses();
+    const all = getAllClasses(from);
     const normNoMedian = Object.entries(all).filter(([, c]) => c.curve?.type === 'norm' && c.curve?.median == null);
 
     if (normNoMedian.length === 1) {
@@ -1399,7 +1399,7 @@ async function performCanvasSync(from: string, classKeys: string[]): Promise<voi
   const totalUngraded = 0;
 
   for (const classKey of classKeys) {
-    const classData = getClass(classKey);
+    const classData = getClass(from, classKey);
     if (!classData?.canvasId) continue;
 
     let scored: CanvasAssignment[];
@@ -1483,7 +1483,7 @@ async function performCanvasSync(from: string, classKeys: string[]): Promise<voi
     classData.canvasGrades = newCanvasGrades;
     classData.canvasAssignmentMap = map;
     classData.lastSyncedAt = new Date().toISOString();
-    saveClass(classKey, classData);
+    saveClass(from, classKey, classData);
   }
 
   // Report sync results
@@ -1493,7 +1493,7 @@ async function performCanvasSync(from: string, classKeys: string[]): Promise<voi
   if (totalSynced === 0 && ambiguousToAsk.length === 0) {
     // Nothing graded yet in Canvas
     if (classKeys.length === 1) {
-      const className = getClass(classKeys[0])?.name || classKeys[0];
+      const className = getClass(from, classKeys[0])?.name || classKeys[0];
       const q = `No graded assignments found in Canvas for ${className} yet. I'll show grades here as soon as your professor posts them.\n\nWant to enter any grades manually in the meantime? (yes/no)`;
       setPendingConfirmation(from, { type: 'manual_entry_offer', data: { classKey: classKeys[0] }, question: q });
       console.log('SAVED PENDING:', 'manual_entry_offer', classKeys[0]);
@@ -1504,7 +1504,7 @@ async function performCanvasSync(from: string, classKeys: string[]): Promise<voi
   } else {
     let reply = `Synced ${totalSynced} assignment${totalSynced !== 1 ? 's' : ''}.`;
     if (totalUngraded > 0) reply += ` (${totalUngraded} ungraded skipped)`;
-    const exampleClass = getClass(classKeys[0])?.name || classKeys[0];
+    const exampleClass = getClass(from, classKeys[0])?.name || classKeys[0];
     reply += `\n\nYou can also add grades manually for anything Canvas hasn't posted yet — e.g. "got 88 on midterm for ${exampleClass}"`;
     await sendMessage(from, reply);
 
@@ -1519,7 +1519,7 @@ async function performCanvasSync(from: string, classKeys: string[]): Promise<voi
     // Kick off classification flow
     const first = ambiguousToAsk[0];
     const rest = ambiguousToAsk.slice(1);
-    const firstClassData = getClass(first.classKey);
+    const firstClassData = getClass(from, first.classKey);
 
     setUserState(from, {
       step: 'awaiting_assignment_classification',
@@ -1540,7 +1540,7 @@ async function performCanvasSync(from: string, classKeys: string[]): Promise<voi
 // ─── Grade Display ────────────────────────────────────────────────────────────
 
 async function showGrade(from: string, classKey: string): Promise<void> {
-  const classData = getClass(classKey);
+  const classData = getClass(from, classKey);
 
   if (!classData) {
     await sendMessage(from, 'No class found. Use "new class: [name]" to add one.');
@@ -1635,7 +1635,7 @@ async function showGrade(from: string, classKey: string): Promise<void> {
 }
 
 async function showAllGrades(from: string): Promise<void> {
-  const classes = getAllClasses();
+  const classes = getAllClasses(from);
   const keys = Object.keys(classes);
 
   if (keys.length === 0) {
@@ -1687,7 +1687,7 @@ function timeAgo(isoString: string): string {
  */
 async function processParsedSyllabus(from: string, pendingClass: string | null, parsed: { categories: ClassData['categories']; dynamicWeights?: ClassData['dynamicWeights']; notes?: string }, forceRestart = false): Promise<void> {
   const classKey = (pendingClass || '').toLowerCase();
-  const existing = getClass(classKey);
+  const existing = getClass(from, classKey);
   const isUpdate = !forceRestart && !!(existing?.categories?.length);
 
   const classData: ClassData = {
@@ -1708,13 +1708,13 @@ async function processParsedSyllabus(from: string, pendingClass: string | null, 
   }
 
   if (isUpdate) {
-    saveLastAction({ type: 'syllabus_updated', classKey, className: pendingClass || classKey, previousClassData: JSON.parse(JSON.stringify(existing!)) as ClassData });
+    saveLastAction(from, { type: 'syllabus_updated', classKey, className: pendingClass || classKey, previousClassData: JSON.parse(JSON.stringify(existing!)) as ClassData });
   }
 
-  saveClass(classKey, classData);
+  saveClass(from, classKey, classData);
 
   if (!isUpdate) {
-    saveLastAction({ type: 'class_added', classKey, className: pendingClass || classKey });
+    saveLastAction(from, { type: 'class_added', classKey, className: pendingClass || classKey });
   }
 
   const catLines = parsed.categories.map(c => `• ${c.name}: ${c.weight}%`).join('\n');
@@ -1746,7 +1746,7 @@ async function processParsedSyllabus(from: string, pendingClass: string | null, 
  * Called when curve setup finishes. Transitions to the "want Canvas?" question.
  */
 async function offerCanvas(from: string, className: string, note: string): Promise<void> {
-  const config = getConfig();
+  const config = getConfig(from);
   const prefix = note ? `${note}\n\n` : '';
   const question = config.canvasConnected
     ? `${prefix}${className} is all set! Want to sync grades from Canvas for this class? (yes/no)`
