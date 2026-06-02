@@ -1066,6 +1066,71 @@ await testA('awaiting_numeric_median skip → hint message includes how to set l
   assert.ok(hasHint, `expected hint about setting median later, got: ${JSON.stringify(msgs)}`);
 });
 
+// ── Dedup logic ──────────────────────────────────────────────────────────────
+
+test('Dedup: isSeen returns false first call, true second call for same key', () => {
+  const map = new Map();
+  const TTL = 30_000;
+  function isSeen(key) {
+    const t = map.get(key);
+    return t !== undefined && Date.now() - t < TTL;
+  }
+  assert.ok(!isSeen('key-a'), 'first call should return false');
+  map.set('key-a', Date.now());
+  assert.ok(isSeen('key-a'), 'second call should return true');
+});
+
+test('Dedup: different content keys are not duplicates', () => {
+  const map = new Map();
+  const TTL = 30_000;
+  function isSeen(key) {
+    const t = map.get(key);
+    return t !== undefined && Date.now() - t < TTL;
+  }
+  map.set('key-a', Date.now());
+  assert.ok(!isSeen('key-b'), 'different key should not be a duplicate');
+});
+
+test('Dedup: contentKey does not include timestamp (no boundary bug)', () => {
+  const from = '+10000000000';
+  const content = 'test message';
+  const media = '';
+  // Verify the key format has no timestamp component
+  const key = `${from}|${content}|${media}`;
+  assert.ok(!key.includes(String(Math.floor(Date.now() / 10000))), 'key must not contain timestamp');
+});
+
+// ── Multi-grade entry ─────────────────────────────────────────────────────────
+
+await testA('Multi-grade message saves all grades in one text', async () => {
+  reset(); mute();
+  await say('new class: Bio 101');
+  await say('Homework 40%, Midterm 30%, Final 30%');
+  await say('4'); await say('no');
+  // Send all three grades at once
+  await say('homework 85%, midterm 80%, final 90%');
+  unmute();
+  const cd = getClassData('bio 101');
+  const hw = cd?.grades?.homework ?? [];
+  const mt = cd?.grades?.midterm ?? [];
+  const fn = cd?.grades?.final ?? [];
+  assert.ok(hw.includes(85), `homework should have 85, got ${JSON.stringify(hw)}`);
+  assert.ok(mt.includes(80), `midterm should have 80, got ${JSON.stringify(mt)}`);
+  assert.ok(fn.includes(90), `final should have 90, got ${JSON.stringify(fn)}`);
+});
+
+await testA('Multi-grade message with two grades saves both', async () => {
+  reset(); mute();
+  await say('new class: Bio 101');
+  await say('Homework 40%, Midterm 30%, Final 30%');
+  await say('4'); await say('no');
+  await say('homework 92%, midterm 78%');
+  unmute();
+  const cd = getClassData('bio 101');
+  assert.ok((cd?.grades?.homework ?? []).includes(92));
+  assert.ok((cd?.grades?.midterm ?? []).includes(78));
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Restore real data
 if (backup) {

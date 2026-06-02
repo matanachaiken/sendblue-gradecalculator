@@ -10,11 +10,21 @@ app.use(express.json());
 
 app.get('/', (req, res) => res.send('grade-brain is running'));
 
-// Dedup cache — keyed by UUID when present, otherwise by "from+content+second".
-// Sendblue fires the webhook for both inbound messages AND outbound delivery events,
-// and sometimes fires the same inbound webhook twice with different UUIDs.
-const seen = new Set();
-setInterval(() => seen.clear(), 60_000);
+// Dedup: Map of key → first-seen timestamp. Check and mark are separated so
+// both happen synchronously before handleIncomingMessage is ever called.
+const seenMessages = new Map();
+const DEDUP_TTL_MS = 30_000;
+setInterval(() => {
+  const cutoff = Date.now() - DEDUP_TTL_MS;
+  for (const [k, t] of seenMessages) {
+    if (t < cutoff) seenMessages.delete(k);
+  }
+}, DEDUP_TTL_MS);
+
+function isSeen(key) {
+  const t = seenMessages.get(key);
+  return t !== undefined && Date.now() - t < DEDUP_TTL_MS;
+}
 
 // Rate limit: max 20 messages per phone number per minute.
 const rateCounts = new Map();
@@ -23,7 +33,6 @@ setInterval(() => rateCounts.clear(), 60_000);
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
-  // Log the full body so we can diagnose any unexpected webhook shapes
   const body = req.body;
   console.log('[webhook]', JSON.stringify({
     from_number: body.from_number,
@@ -51,16 +60,20 @@ app.post('/webhook', async (req, res) => {
     return;
   }
 
-  // Dedup: check both UUID and content fingerprint.
-  // Sendblue sometimes fires the same message twice with different UUIDs,
-  // so the content key catches that case even when UUIDs differ.
-  const contentKey = `${from_number}|${content}|${media_url || ''}|${Math.floor(Date.now() / 10000)}`;
-  if (seen.has(contentKey) || (uuid && seen.has(uuid))) {
+  // Dedup: check both content fingerprint and UUID before marking either as seen.
+  // Both checks happen synchronously here, before any async work begins.
+  const contentKey = `${from_number}|${content}|${media_url || ''}`;
+  const isContentDup = isSeen(contentKey);
+  const isUuidDup = !!(uuid && isSeen(uuid));
+
+  if (isContentDup || isUuidDup) {
     console.log('[webhook] duplicate dropped:', uuid || contentKey);
     return;
   }
-  seen.add(contentKey);
-  if (uuid) seen.add(uuid);
+
+  // Mark as seen synchronously — before the first await below.
+  seenMessages.set(contentKey, Date.now());
+  if (uuid) seenMessages.set(uuid, Date.now());
 
   try {
     await handleIncomingMessage(from_number, content || '', media_url || null);

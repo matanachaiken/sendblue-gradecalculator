@@ -247,6 +247,7 @@ Rules:
 - Return ONLY valid JSON, no markdown, no explanation
 - Any phrasing of class average → enter_class_average: "class average is X", "avg was X", "class avg: X", "the average for Y is X", "mean is X", "average: X"
 - Any phrasing of a personal score → enter_grade: "got X", "scored X", "X on the Y", "made X", "I got X", "X% on"
+- Multiple grades in one message (e.g. "participation 90%, midterm 96%, final 89.2%" or "homework 85, midterm 78, final 92") → return an ARRAY of enter_grade objects, one per grade. Use the only known class as classKey if there is exactly one class, otherwise match by name. Each object: { "action": "enter_grade", "classKey": "...", "categoryName": "...", "score": N }
 - Any phrasing of grade inquiry → check_grade: "what's my grade", "how am I doing", "my grade", "show grade", "grade check", "where am I"
 - "sync canvas", "update grades", "refresh from canvas" → sync_canvas
 - "connect canvas", "setup canvas", "reconnect canvas", "login" → connect_canvas
@@ -376,6 +377,20 @@ function mockClassifyIntent(message, classes) {
   // new class: [name]
   let m = t.match(/^new\s+class\s*[:\-]\s*(.+)/i);
   if (m) return { action: 'new_class', className: m[1].trim() };
+
+  // Multiple grades in one message: "participation 90%, midterm 96%, final 89.2%"
+  // or "homework 85, midterm 78" — at least two category+score pairs
+  const multiGradeMatches = [...lower.matchAll(/([a-z][a-z\s]{2,}?)\s+(\d+(?:\.\d+)?)\s*%?(?=[,\n]|$)/g)];
+  if (multiGradeMatches.length >= 2) {
+    const classKey = classKeys.length === 1 ? classKeys[0] : matchClass(lower);
+    const intents = multiGradeMatches.map(mg => ({
+      action: 'enter_grade',
+      classKey,
+      categoryName: mg[1].trim(),
+      score: Number(mg[2]),
+    }));
+    return { action: 'multi', intents };
+  }
 
   // got [score] on [class?] [category]
   m = lower.match(/^got\s+(\d+(?:\.\d+)?)\s+on\s+(.+)/);
