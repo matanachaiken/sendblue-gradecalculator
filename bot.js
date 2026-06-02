@@ -107,6 +107,7 @@ export async function handleIncomingMessage(from, text, mediaUrl) {
 // this first so context is never lost between messages.
 
 async function handlePendingConfirmation(from, pc, answer, state) {
+  console.log('HANDLING PENDING:', pc.type, 'ANSWER:', answer);
   const lower = answer.toLowerCase().trim();
   const isYes = /^(y(es|eah|ep)?|1)$/.test(lower);
   const isNo  = /^(no?|nope|nah|2|cancel)$/.test(lower);
@@ -300,6 +301,148 @@ async function handlePendingConfirmation(from, pc, answer, state) {
 
       await sendMessage(from, `Got it — class median ${median} maps to ${letter} for ${cdNorm.name}.`);
       await showGrade(from, classKey);
+      break;
+    }
+
+    case 'awaiting_numeric_median': {
+      const { classKey, letter } = pc.data;
+      const cdNorm = getClass(classKey);
+      if (!cdNorm) break;
+
+      const lower2 = answer.toLowerCase().trim();
+      const isSkip = lower2 === 'skip' || isYes;
+      const median = parseFloat(answer);
+
+      if (isSkip) {
+        cdNorm.curve = { ...cdNorm.curve, mappedGrade: letter };
+        saveClass(classKey, cdNorm);
+        await sendMessage(from, `Got it — target grade is ${letter} for ${cdNorm.name}. Grade display will show your target but can't do relative positioning without a numeric median.`);
+        await showGrade(from, classKey);
+      } else if (!isNaN(median)) {
+        cdNorm.curve = { ...cdNorm.curve, median, mappedGrade: letter };
+        saveClass(classKey, cdNorm);
+        await sendMessage(from, `Got it — class median ${median} maps to ${letter} for ${cdNorm.name}.`);
+        await showGrade(from, classKey);
+      } else {
+        setPendingConfirmation(from, pc);
+        await sendMessage(from, `Enter the numeric median score (e.g. 72), or reply "skip" if there's no number.`);
+      }
+      break;
+    }
+
+    // Legacy cases kept for any states persisted before the flow change
+    case 'norm_median_confirm': {
+      const { classKey, letter } = pc.data;
+      const cdNorm = getClass(classKey);
+      if (!cdNorm) break;
+      if (isYes) {
+        cdNorm.curve = { ...cdNorm.curve, mappedGrade: letter };
+        saveClass(classKey, cdNorm);
+        await sendMessage(from, `Got it — target grade is ${letter} for ${cdNorm.name}.`);
+        await showGrade(from, classKey);
+      } else {
+        setPendingConfirmation(from, { type: 'awaiting_numeric_median', data: { classKey, letter }, question: `What was the numeric median? (e.g. 72)` });
+        await sendMessage(from, 'Enter the numeric median score (e.g. 72), or reply "skip" if there\'s no number.');
+      }
+      break;
+    }
+
+    case 'norm_median_then_letter': {
+      const { classKey, letter } = pc.data;
+      const median = parseFloat(answer);
+      if (isNaN(median)) {
+        setPendingConfirmation(from, pc);
+        await sendMessage(from, 'Enter a number for the median (e.g. 72).');
+        return;
+      }
+      const cdNorm = getClass(classKey);
+      if (!cdNorm) break;
+      cdNorm.curve = { ...cdNorm.curve, median, mappedGrade: letter };
+      saveClass(classKey, cdNorm);
+      await sendMessage(from, `Got it — class median ${median} maps to ${letter} for ${cdNorm.name}.`);
+      await showGrade(from, classKey);
+      break;
+    }
+
+    case 'confirm_undo': {
+      if (!isYes) {
+        await sendMessage(from, 'Cancelled.');
+        break;
+      }
+
+      const last = pc.data.last;
+      clearLastAction();
+
+      switch (last.type) {
+        case 'grade_saved': {
+          const cd = getClass(last.classKey);
+          if (cd) { cd.grades[last.catKey] = last.previousGrades; saveClass(last.classKey, cd); }
+          await sendMessage(from, `Undone — removed ${last.catDisplay} grade of ${last.score} from ${last.className}.`);
+          break;
+        }
+        case 'grade_deleted': {
+          const cd = getClass(last.classKey);
+          if (cd) { cd.grades[last.catKey] = last.previousGrades; saveClass(last.classKey, cd); }
+          await sendMessage(from, `Undone — restored ${last.catDisplay} grade of ${last.removedScore} in ${last.className}.`);
+          break;
+        }
+        case 'class_average_saved': {
+          const cd = getClass(last.classKey);
+          if (cd) {
+            if (last.field === 'curve.classAvg') {
+              last.previousValue == null ? delete cd.curve.classAvg : (cd.curve = { ...cd.curve, classAvg: last.previousValue });
+            } else if (last.field === 'curve.median') {
+              last.previousValue == null ? delete cd.curve.median : (cd.curve = { ...cd.curve, median: last.previousValue });
+            } else if (last.field?.startsWith('classAverages.')) {
+              const catKey = last.field.slice('classAverages.'.length);
+              last.previousValue == null ? delete cd.classAverages[catKey] : (cd.classAverages[catKey] = last.previousValue);
+            }
+            saveClass(last.classKey, cd);
+          }
+          await sendMessage(from, `Undone — removed ${last.label || 'class average'} for ${last.className}.`);
+          break;
+        }
+        case 'norm_grade_saved': {
+          const cd = getClass(last.classKey);
+          if (cd) {
+            last.previousValue == null ? delete cd.curve.mappedGrade : (cd.curve = { ...cd.curve, mappedGrade: last.previousValue });
+            saveClass(last.classKey, cd);
+          }
+          await sendMessage(from, `Undone — removed norm curve letter grade for ${last.className}.`);
+          break;
+        }
+        case 'class_added': {
+          deleteClass(last.classKey);
+          await sendMessage(from, `Undone — deleted ${last.className}.`);
+          break;
+        }
+        case 'syllabus_updated': {
+          saveClass(last.classKey, last.previousClassData);
+          await sendMessage(from, `Undone — restored previous syllabus weights for ${last.className}.`);
+          break;
+        }
+        case 'canvas_linked': {
+          saveClass(last.classKey, last.previousClassData);
+          await sendMessage(from, `Undone — unlinked Canvas from ${last.className} and restored previous grades.`);
+          const resyncQ = `Want to re-sync Canvas for ${last.className}? (yes/no)`;
+          setPendingConfirmation(from, { type: 'canvas_resync_offer', data: { classKey: last.classKey, className: last.className }, question: resyncQ });
+          console.log('SAVED PENDING:', 'canvas_resync_offer', last.classKey);
+          await sendMessage(from, resyncQ);
+          break;
+        }
+        default:
+          await sendMessage(from, 'Undone.');
+      }
+      break;
+    }
+
+    case 'canvas_resync_offer': {
+      const { classKey, className } = pc.data;
+      if (isYes) {
+        await offerCanvas(from, className, '');
+      } else {
+        await sendMessage(from, 'OK. Text "connect canvas" any time to re-link.');
+      }
       break;
     }
 
@@ -903,76 +1046,15 @@ async function handleIntent(from, text, intent) {
   // ── Undo last action ─────────────────────────────────────────────────────
   if (action === 'undo') {
     const last = getLastAction();
-
     if (!last) {
       await sendMessage(from, 'Nothing to undo yet.');
       return;
     }
-
-    clearLastAction();
-
-    switch (last.type) {
-      case 'grade_saved': {
-        const cd = getClass(last.classKey);
-        if (cd) {
-          cd.grades[last.catKey] = last.previousGrades;
-          saveClass(last.classKey, cd);
-        }
-        await sendMessage(from, `Undone — removed the ${last.catDisplay} grade of ${last.score} from ${last.className}. You're back to where you were.`);
-        break;
-      }
-      case 'class_average_saved': {
-        const cd = getClass(last.classKey);
-        if (cd) {
-          if (last.field === 'curve.classAvg') {
-            last.previousValue == null ? delete cd.curve.classAvg : (cd.curve = { ...cd.curve, classAvg: last.previousValue });
-          } else if (last.field === 'curve.median') {
-            last.previousValue == null ? delete cd.curve.median : (cd.curve = { ...cd.curve, median: last.previousValue });
-          } else if (last.field?.startsWith('classAverages.')) {
-            const catKey = last.field.slice('classAverages.'.length);
-            last.previousValue == null ? delete cd.classAverages[catKey] : (cd.classAverages[catKey] = last.previousValue);
-          }
-          saveClass(last.classKey, cd);
-        }
-        await sendMessage(from, `Undone — removed the ${last.label || 'class average'} for ${last.className}. You're back to where you were.`);
-        break;
-      }
-      case 'norm_grade_saved': {
-        const cd = getClass(last.classKey);
-        if (cd) {
-          last.previousValue == null ? delete cd.curve.mappedGrade : (cd.curve = { ...cd.curve, mappedGrade: last.previousValue });
-          saveClass(last.classKey, cd);
-        }
-        await sendMessage(from, `Undone — removed the norm curve letter grade for ${last.className}. You're back to where you were.`);
-        break;
-      }
-      case 'grade_deleted': {
-        const cd = getClass(last.classKey);
-        if (cd) {
-          cd.grades[last.catKey] = last.previousGrades;
-          saveClass(last.classKey, cd);
-        }
-        await sendMessage(from, `Undone — restored ${last.catDisplay} grade of ${last.removedScore} in ${last.className}.`);
-        break;
-      }
-      case 'class_added': {
-        deleteClass(last.classKey);
-        await sendMessage(from, `Undone — deleted ${last.className}. You're back to where you were.`);
-        break;
-      }
-      case 'syllabus_updated': {
-        saveClass(last.classKey, last.previousClassData);
-        await sendMessage(from, `Undone — restored the previous syllabus weights for ${last.className}. You're back to where you were.`);
-        break;
-      }
-      case 'canvas_linked': {
-        saveClass(last.classKey, last.previousClassData);
-        await sendMessage(from, `Undone — unlinked Canvas from ${last.className} and restored previous grades. You're back to where you were.`);
-        break;
-      }
-      default:
-        await sendMessage(from, `Undone. You're back to where you were.`);
-    }
+    const description = describeAction(last);
+    const q = `Undo ${description}? (yes/no)`;
+    setPendingConfirmation(from, { type: 'confirm_undo', data: { last }, question: q });
+    console.log('SAVED PENDING:', 'confirm_undo');
+    await sendMessage(from, q);
     return;
   }
 
@@ -1021,6 +1103,38 @@ async function handleIntent(from, text, intent) {
     classData.creditHours = Number(credits);
     saveClass(classKey, classData);
     await sendMessage(from, `Set ${classData.name} to ${credits} credit hour${credits !== 1 ? 's' : ''}. Text "my GPA" to see your semester GPA.`);
+    return;
+  }
+
+  // ── Set norm curve letter without a numeric median ────────────────────────
+  if (action === 'set_norm_letter') {
+    const { classKey, letter } = intent;
+    const VALID = ['A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
+    const upperLetter = letter?.toUpperCase();
+
+    if (!classKey) {
+      await sendMessage(from, 'Which class? Try: "data structures median is B+"');
+      return;
+    }
+    if (!upperLetter || !VALID.includes(upperLetter)) {
+      await sendMessage(from, `That doesn't look like a valid letter grade. Options: ${VALID.join(', ')}`);
+      return;
+    }
+
+    const classData = getClass(classKey);
+    if (!classData) {
+      await sendMessage(from, `No class matching "${classKey}".`);
+      return;
+    }
+    if (classData.curve?.type !== 'norm') {
+      await sendMessage(from, `${classData.name} doesn't use a norm-referenced curve.`);
+      return;
+    }
+
+    const q = `What was the numeric median score for ${classData.name}? (e.g. 72 — or "skip" if there's no number)`;
+    setPendingConfirmation(from, { type: 'awaiting_numeric_median', data: { classKey, letter: upperLetter }, question: q });
+    console.log('SAVED PENDING:', 'awaiting_numeric_median', classKey);
+    await sendMessage(from, q);
     return;
   }
 
@@ -1238,7 +1352,7 @@ async function performCanvasSync(from, classKeys) {
     // Apply new confident matches; queue ambiguous ones
     for (const a of unclassified) {
       const result = newMappings[a.name] || { catKey: null, confident: false };
-      const catKeyValid = result.catKey && newGrades[result.catKey] !== undefined;
+      const catKeyValid = result.catKey && newCanvasGrades[result.catKey] !== undefined;
 
       if (result.confident && catKeyValid) {
         map[a.id] = result.catKey;
@@ -1424,6 +1538,19 @@ async function showAllGrades(from) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function describeAction(last) {
+  switch (last.type) {
+    case 'grade_saved':         return `adding ${last.score} to ${last.catDisplay} in ${last.className}`;
+    case 'grade_deleted':       return `removing ${last.removedScore} from ${last.catDisplay} in ${last.className}`;
+    case 'class_average_saved': return `saving ${last.label} for ${last.className}`;
+    case 'norm_grade_saved':    return `setting norm curve letter to ${last.newValue} for ${last.className}`;
+    case 'class_added':         return `adding ${last.className}`;
+    case 'syllabus_updated':    return `updating syllabus weights for ${last.className}`;
+    case 'canvas_linked':       return `linking Canvas to ${last.className}`;
+    default:                    return 'last action';
+  }
+}
 
 function timeAgo(isoString) {
   const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);

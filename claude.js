@@ -237,6 +237,7 @@ Actions and their JSON shapes:
 - set_credits:         { "action": "set_credits", "classKey": "bio 101", "credits": 3 }
 - hypothetical_grade:  { "action": "hypothetical_grade", "classKey": "bio 101", "categoryName": "final", "score": 80 }
 - delete_grade:        { "action": "delete_grade", "classKey": "bio 101", "categoryName": "midterm", "score": 45 }
+- set_norm_letter:     { "action": "set_norm_letter", "classKey": "data structures", "letter": "B+" }
 - confirm:             { "action": "confirm", "guess": "Did you mean to set the class average for Bio 101 midterm to 71?", "confirmedIntent": { "action": "enter_class_average", "classKey": "bio 101", "categoryName": "midterm", "average": 71 } }
 - unknown:             { "action": "unknown" }
 
@@ -258,6 +259,7 @@ Rules:
 - "bio is 3 credits", "set bio to 4 credits", "bio 101 is 3 credit hours", "[class] = N credits" → set_credits
 - "what would my grade be if I got 80 on the final", "if I score 90 on midterm what's my grade", "hypothetically if I get 75 on the final" → hypothetical_grade
 - "remove my 45 on bio midterm", "delete last bio midterm grade", "erase my 72 on the final" → delete_grade; score is optional — omit if not specified
+- "class median B+", "the median is B+", "median maps to B+", or any message that mentions a letter grade (A/A-/B+/B/B-/C+/C/C-/D/F) in the context of a curve median without a numeric score → set_norm_letter
 - Only use action "unknown" when you genuinely cannot determine any intent (e.g. gibberish or completely off-topic)`;
 
   const raw = await askClaude(system, message);
@@ -419,6 +421,31 @@ function mockClassifyIntent(message, classes) {
   if (/^reset$/.test(lower)) return { action: 'reset' };
   if (/^(undo|go back|nevermind|oops|back)$/.test(lower)) return { action: 'undo' };
   if (/manual|enter manually|add manually/.test(lower)) return { action: 'enter_manually', classKey: matchClass(lower) };
+
+  // show gpa
+  if (/\bgpa\b|grade point/.test(lower)) return { action: 'show_gpa' };
+
+  // [class] is N credits
+  m = lower.match(/^(.+?)\s+is\s+(\d+)\s+credits?/);
+  if (m) return { action: 'set_credits', classKey: matchClass(m[1]), credits: Number(m[2]) };
+
+  // what if I got N on [category] / hypothetical N on [category]
+  m = lower.match(/(?:what if|if i got|hypothetical(?:ly)?(?:\s+if i get)?)\s+(\d+(?:\.\d+)?)\s+on\s+(.+)/);
+  if (m) {
+    const rest = m[2];
+    const classKey = matchClass(rest);
+    const catPart = classKey ? rest.replace(classKey.split(' ')[0], '').trim() : rest;
+    return { action: 'hypothetical_grade', score: Number(m[1]), classKey, categoryName: catPart.trim() };
+  }
+
+  // remove/delete/erase my N on [category]
+  m = lower.match(/(?:remove|delete|erase)\s+(?:my\s+)?(\d+(?:\.\d+)?)\s+(?:on|from)\s+(.+)/);
+  if (m) {
+    const rest = m[2];
+    const classKey = matchClass(rest);
+    const catPart = classKey ? rest.replace(classKey.split(' ')[0], '').trim() : rest;
+    return { action: 'delete_grade', score: Number(m[1]), classKey, categoryName: catPart.trim() };
+  }
 
   return { action: 'unknown' };
 }

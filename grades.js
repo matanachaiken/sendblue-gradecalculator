@@ -101,6 +101,10 @@ function applyCurveToFinal(rawGrade, curve) {
   }
 
   if (curve.type === 'norm') {
+    // Median confirmed absent — show target letter with a note
+    if (curve.median == null && curve.mappedGrade) {
+      return { curvedGrade: rawGrade, curvedLetter: curve.mappedGrade, pending: false, note: `target: ${curve.mappedGrade} (no numeric median — relative positioning unavailable)` };
+    }
     if (curve.median == null) {
       return { curvedGrade: rawGrade, curvedLetter: null, pending: true, note: 'Enter the class median to apply the curve' };
     }
