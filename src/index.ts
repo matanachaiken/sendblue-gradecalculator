@@ -1,5 +1,5 @@
-// index.js — HTTP server that receives Sendblue webhook events
-import express from 'express';
+// index.ts — HTTP server that receives Sendblue webhook events
+import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import { handleIncomingMessage } from './bot.js';
 
@@ -8,11 +8,11 @@ dotenv.config({ override: true });
 const app = express();
 app.use(express.json());
 
-app.get('/', (req, res) => res.send('grade-brain is running'));
+app.get('/', (_req: Request, res: Response) => res.send('grade-brain is running'));
 
 // Dedup: Map of key → first-seen timestamp. Check and mark are separated so
 // both happen synchronously before handleIncomingMessage is ever called.
-const seenMessages = new Map();
+const seenMessages = new Map<string, number>();
 const DEDUP_TTL_MS = 30_000;
 setInterval(() => {
   const cutoff = Date.now() - DEDUP_TTL_MS;
@@ -21,25 +21,25 @@ setInterval(() => {
   }
 }, DEDUP_TTL_MS);
 
-function isSeen(key) {
+function isSeen(key: string): boolean {
   const t = seenMessages.get(key);
   return t !== undefined && Date.now() - t < DEDUP_TTL_MS;
 }
 
 // Rate limit: max 20 messages per phone number per minute.
-const rateCounts = new Map();
+const rateCounts = new Map<string, number>();
 setInterval(() => rateCounts.clear(), 60_000);
 
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', async (req: Request, res: Response) => {
   res.sendStatus(200);
 
-  const body = req.body;
+  const body = req.body as Record<string, unknown>;
   console.log('[webhook]', JSON.stringify({
     from_number: body.from_number,
     is_outbound: body.is_outbound,
     status: body.status,
     uuid: body.uuid,
-    content: body.content?.slice(0, 50),
+    content: typeof body.content === 'string' ? body.content.slice(0, 50) : undefined,
   }));
 
   // Skip outbound delivery events (bot's own sent messages)
@@ -48,7 +48,10 @@ app.post('/webhook', async (req, res) => {
   // Skip status-update webhooks (delivered, read, etc.) — only process RECEIVED
   if (body.status && body.status !== 'RECEIVED') return;
 
-  const { content, from_number, media_url, uuid } = body;
+  const content = body.content as string | undefined;
+  const from_number = body.from_number as string | undefined;
+  const media_url = body.media_url as string | undefined;
+  const uuid = body.uuid as string | undefined;
 
   if (!from_number || (!content && !media_url)) return;
   if (from_number !== process.env.MY_PHONE) return;
@@ -78,7 +81,8 @@ app.post('/webhook', async (req, res) => {
   try {
     await handleIncomingMessage(from_number, content || '', media_url || null);
   } catch (err) {
-    console.error('Error handling message:', err.message);
+    const e = err as { message?: string };
+    console.error('Error handling message:', e.message);
   }
 });
 

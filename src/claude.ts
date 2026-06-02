@@ -1,20 +1,21 @@
-// claude.js — All calls to the Anthropic Claude API
+// claude.ts — All calls to the Anthropic Claude API
 import axios from 'axios';
 import dotenv from 'dotenv';
+import type { ClassData, Intent, ParsedSyllabus, AssignmentMatch, Category, CanvasAssignment } from './types.js';
 
 dotenv.config({ override: true });
 
 const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-sonnet-4-6';
 
+interface ClaudeResponse {
+  content: Array<{ text: string }>;
+}
+
 /**
  * Low-level helper: send a prompt to Claude and get back a text response.
- *
- * @param {string} systemPrompt - Instructions telling Claude how to behave
- * @param {string} userMessage  - The actual input to process
- * @returns {string} Claude's text response
  */
-async function askClaude(systemPrompt, userMessage) {
+async function askClaude(systemPrompt: string, userMessage: string): Promise<string> {
   const response = await axios.post(
     CLAUDE_URL,
     {
@@ -31,20 +32,11 @@ async function askClaude(systemPrompt, userMessage) {
       },
     }
   );
-  return response.data.content[0].text;
+  return (response.data as ClaudeResponse).content[0].text;
 }
 
-/**
- * Parse a syllabus grading section from an image using Claude vision.
- * The caller is responsible for downloading the image and passing base64 + mediaType.
- *
- * @param {string} base64Data - Base64-encoded image data
- * @param {string} mediaType  - MIME type (e.g. 'image/jpeg', 'image/png')
- * @param {string} className  - Class name for context
- * @returns {{ categories: Array<{name, weight}>, notes: string } | null}
- */
 // Shared prompt for both image parsing functions
-const IMAGE_PROMPT = (className) =>
+const IMAGE_PROMPT = (className: string | null): string =>
   `Extract the grading breakdown from this syllabus image${className ? ` for ${className}` : ''}.
 
 Return ONLY valid JSON (no markdown):
@@ -59,7 +51,7 @@ Weights are plain numbers (30 means 30%) and should sum to 100.`;
  * Parse a syllabus image by passing its URL directly to Claude.
  * Simplest approach — no download needed if the URL is publicly accessible.
  */
-export async function parseSyllabusFromUrl(imageUrl, className) {
+export async function parseSyllabusFromUrl(imageUrl: string, className: string | null): Promise<ParsedSyllabus | null> {
   if (process.env.TEST_MODE === 'true') return null;
 
   const response = await axios.post(
@@ -84,10 +76,10 @@ export async function parseSyllabusFromUrl(imageUrl, className) {
     }
   );
 
-  const text = response.data.content[0].text;
+  const text = (response.data as ClaudeResponse).content[0].text;
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]) as ParsedSyllabus;
   } catch (e) {
     console.error('parseSyllabusFromUrl: failed to parse JSON:', text);
   }
@@ -98,7 +90,7 @@ export async function parseSyllabusFromUrl(imageUrl, className) {
  * Parse a syllabus image from a pre-downloaded base64 buffer.
  * Used as a fallback when the URL requires auth headers to download.
  */
-export async function parseSyllabusFromImage(base64Data, mediaType, className) {
+export async function parseSyllabusFromImage(base64Data: string, mediaType: string, className: string | null): Promise<ParsedSyllabus | null> {
   if (process.env.TEST_MODE === 'true') return null;
 
   const response = await axios.post(
@@ -126,10 +118,10 @@ export async function parseSyllabusFromImage(base64Data, mediaType, className) {
     }
   );
 
-  const text = response.data.content[0].text;
+  const text = (response.data as ClaudeResponse).content[0].text;
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]) as ParsedSyllabus;
   } catch (e) {
     console.error('parseSyllabusFromImage: failed to parse JSON:', text);
   }
@@ -138,20 +130,14 @@ export async function parseSyllabusFromImage(base64Data, mediaType, className) {
 
 /**
  * Parse a messy syllabus grading section into structured categories.
- *
- * @param {string} className    - Name of the class (for context)
- * @param {string} syllabusText - Raw text from the grading section of the syllabus
- * @returns {{ categories: Array<{name: string, weight: number}>, notes: string } | null}
- *   categories: array of {name, weight} where weight is a percentage (e.g. 30 for 30%)
- *   null if parsing fails
  */
-export async function parseSyllabus(className, syllabusText) {
+export async function parseSyllabus(className: string | null, syllabusText: string): Promise<ParsedSyllabus | null> {
   // ── Offline mock for TEST_MODE ────────────────────────────────────────────
   if (process.env.TEST_MODE === 'true') {
     // Handles formats like: "Midterm 30%", "Final Exam: 40%", "Lab Reports - 20%"
-    const categories = [];
+    const categories: Category[] = [];
     const re = /([A-Za-z][A-Za-z ]*?)\s*[:\-]?\s*(\d+)\s*%/g;
-    let m;
+    let m: RegExpExecArray | null;
     while ((m = re.exec(syllabusText)) !== null) {
       categories.push({ name: m[1].trim(), weight: Number(m[2]) });
     }
@@ -185,7 +171,7 @@ Rules:
   try {
     // Claude sometimes wraps JSON in markdown code blocks — strip them
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]) as ParsedSyllabus;
   } catch (e) {
     console.error('parseSyllabus: failed to parse JSON from:', raw);
   }
@@ -195,12 +181,8 @@ Rules:
 
 /**
  * Classify what the user wants to do and extract the relevant details.
- *
- * @param {string} message  - The user's raw iMessage text
- * @param {object} classes  - Current classes object from storage (key → classData)
- * @returns {object} An intent object — shape depends on the action field
  */
-export async function classifyIntent(message, classes) {
+export async function classifyIntent(message: string, classes: Record<string, ClassData>): Promise<Intent> {
   // ── Offline mock for TEST_MODE ────────────────────────────────────────────
   if (process.env.TEST_MODE === 'true') {
     return mockClassifyIntent(message, classes);
@@ -269,13 +251,13 @@ Rules:
     // Try array first (Claude returns one when the message contains multiple intents)
     const arrayMatch = raw.match(/\[[\s\S]*\]/);
     if (arrayMatch) {
-      const intents = JSON.parse(arrayMatch[0]);
+      const intents = JSON.parse(arrayMatch[0]) as Intent[];
       if (Array.isArray(intents) && intents.length > 0) {
         return intents.length === 1 ? intents[0] : { action: 'multi', intents };
       }
     }
     const objMatch = raw.match(/\{[\s\S]*\}/);
-    if (objMatch) return JSON.parse(objMatch[0]);
+    if (objMatch) return JSON.parse(objMatch[0]) as Intent;
   } catch (e) {
     console.error('classifyIntent: failed to parse JSON from:', raw);
   }
@@ -286,23 +268,20 @@ Rules:
 /**
  * Match a batch of Canvas assignments to syllabus grading categories.
  * Uses a single Claude call so syncing 30 assignments costs one API call, not 30.
- *
- * @param {Array<{name: string, groupName: string}>} assignments
- * @param {Array<{name: string, weight: number}>} categories  - from the syllabus
- * @returns {object} Map of assignmentName → { catKey: string|null, confident: boolean }
- *   catKey is the exact lowercase category name (matches the grades object key in storage).
- *   confident: true if Claude is sure; false if ambiguous — bot will ask the user.
  */
-export async function batchMatchAssignments(assignments, categories) {
+export async function batchMatchAssignments(
+  assignments: CanvasAssignment[],
+  categories: Category[]
+): Promise<Record<string, AssignmentMatch>> {
   if (assignments.length === 0) return {};
 
   // ── Offline mock for TEST_MODE ────────────────────────────────────────────
   if (process.env.TEST_MODE === 'true') {
     // Simple word-overlap matching: if assignment name contains a category word, match it
-    const result = {};
+    const result: Record<string, AssignmentMatch> = {};
     for (const a of assignments) {
       const aLower = (a.name + ' ' + a.groupName).toLowerCase();
-      let best = null;
+      let best: string | null = null;
       for (const cat of categories) {
         const words = cat.name.toLowerCase().split(/\s+/);
         if (words.some(w => w.length > 3 && aLower.includes(w))) {
@@ -348,7 +327,7 @@ Return ONLY valid JSON (no markdown):
 
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]) as Record<string, AssignmentMatch>;
   } catch (e) {
     console.error('batchMatchAssignments: failed to parse JSON:', raw);
   }
@@ -359,15 +338,15 @@ Return ONLY valid JSON (no markdown):
 
 // ─── TEST_MODE mock for classifyIntent ────────────────────────────────────────
 // Regex-based intent parser used when TEST_MODE=true.
-// Covers all patterns used in test.js without calling the API.
+// Covers all patterns used in test.ts without calling the API.
 
-function mockClassifyIntent(message, classes) {
+function mockClassifyIntent(message: string, classes: Record<string, ClassData>): Intent {
   const t = message.trim();
   const lower = t.toLowerCase();
   const classKeys = Object.keys(classes);
 
   // Helper: find the first class key whose name appears in the message
-  function matchClass(str) {
+  function matchClass(str: string): string | null {
     return classKeys.find(k => {
       const words = k.split(' ');
       return words.some(w => str.includes(w));
@@ -383,8 +362,8 @@ function mockClassifyIntent(message, classes) {
   const multiGradeMatches = [...lower.matchAll(/([a-z][a-z\s]{2,}?)\s+(\d+(?:\.\d+)?)\s*%?(?=[,\n]|$)/g)];
   if (multiGradeMatches.length >= 2) {
     const classKey = classKeys.length === 1 ? classKeys[0] : matchClass(lower);
-    const intents = multiGradeMatches.map(mg => ({
-      action: 'enter_grade',
+    const intents: Intent[] = multiGradeMatches.map(mg => ({
+      action: 'enter_grade' as const,
       classKey,
       categoryName: mg[1].trim(),
       score: Number(mg[2]),
@@ -422,7 +401,7 @@ function mockClassifyIntent(message, classes) {
 
   // update syllabus for [class]
   m = lower.match(/update syllabus(?:\s+for)?\s+(.+)/);
-  if (m) return { action: 'update_syllabus', classKey: matchClass(m[1]) };
+  if (m) return { action: 'update_syllabus', classKey: matchClass(m[1]) || '' };
 
   // sync / connect canvas
   if (/sync canvas|update grades/.test(lower)) return { action: 'sync_canvas' };
@@ -430,7 +409,7 @@ function mockClassifyIntent(message, classes) {
 
   // delete [class]
   m = lower.match(/^delete\s+(.+)/);
-  if (m) return { action: 'delete_class', classKey: matchClass(m[1]) };
+  if (m) return { action: 'delete_class', classKey: matchClass(m[1]) || '' };
 
   if (/^help$/.test(lower)) return { action: 'help' };
   if (/^reset$/.test(lower)) return { action: 'reset' };
@@ -442,7 +421,7 @@ function mockClassifyIntent(message, classes) {
 
   // [class] is N credits
   m = lower.match(/^(.+?)\s+is\s+(\d+)\s+credits?/);
-  if (m) return { action: 'set_credits', classKey: matchClass(m[1]), credits: Number(m[2]) };
+  if (m) return { action: 'set_credits', classKey: matchClass(m[1]) || '', credits: Number(m[2]) };
 
   // what if I got N on [category] / hypothetical N on [category]
   m = lower.match(/(?:what if|if i got|hypothetical(?:ly)?(?:\s+if i get)?)\s+(\d+(?:\.\d+)?)\s+on\s+(.+)/);
@@ -450,7 +429,7 @@ function mockClassifyIntent(message, classes) {
     const rest = m[2];
     const classKey = matchClass(rest);
     const catPart = classKey ? rest.replace(classKey.split(' ')[0], '').trim() : rest;
-    return { action: 'hypothetical_grade', score: Number(m[1]), classKey, categoryName: catPart.trim() };
+    return { action: 'hypothetical_grade', score: Number(m[1]), classKey: classKey || '', categoryName: catPart.trim() };
   }
 
   // remove/delete/erase my N on [category]
@@ -459,7 +438,7 @@ function mockClassifyIntent(message, classes) {
     const rest = m[2];
     const classKey = matchClass(rest);
     const catPart = classKey ? rest.replace(classKey.split(' ')[0], '').trim() : rest;
-    return { action: 'delete_grade', score: Number(m[1]), classKey, categoryName: catPart.trim() };
+    return { action: 'delete_grade', score: Number(m[1]), classKey: classKey || '', categoryName: catPart.trim() };
   }
 
   return { action: 'unknown' };

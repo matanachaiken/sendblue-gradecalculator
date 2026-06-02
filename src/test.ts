@@ -1,8 +1,8 @@
-// test.js — Comprehensive tests for grade-brain
-// Run with: node test.js
+// test.ts — Comprehensive tests for grade-brain
+// Run with: node dist/test.js
 //
 // Sections:
-//   1. Grade calculation  — pure unit tests on grades.js functions
+//   1. Grade calculation  — pure unit tests on grades.ts functions
 //   2. Conversation flows — full bot simulation via handleIncomingMessage
 //   3. Input parsing      — natural language → correct intent / state
 //   4. Edge cases         — boundary conditions and unusual inputs
@@ -13,33 +13,36 @@ process.env.MY_PHONE = process.env.MY_PHONE || '+10000000000';
 import assert from 'assert';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { calcCurrentGrade, calcNeeded, calcBestPossible, calcGPA } from './grades.js';
+import type { ClassData, Curve, DynamicWeights } from './types.js';
 
 const { handleIncomingMessage } = await import('./bot.js');
 
 // ── Test harness ─────────────────────────────────────────────────────────────
 
 let passed = 0, failed = 0;
-const failures = [];
+const failures: string[] = [];
 
-function test(desc, fn) {
+function test(desc: string, fn: () => void): void {
   try {
     fn();
     process.stdout.write(`  ✓  ${desc}\n`);
     passed++;
   } catch (e) {
-    process.stdout.write(`  ✗  ${desc}\n     → ${e.message}\n`);
+    const err = e as { message?: string };
+    process.stdout.write(`  ✗  ${desc}\n     → ${err.message}\n`);
     failed++;
     failures.push(desc);
   }
 }
 
-async function testA(desc, fn) {
+async function testA(desc: string, fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
     process.stdout.write(`  ✓  ${desc}\n`);
     passed++;
   } catch (e) {
-    process.stdout.write(`  ✗  ${desc}\n     → ${e.message}\n`);
+    const err = e as { message?: string };
+    process.stdout.write(`  ✗  ${desc}\n     → ${err.message}\n`);
     failed++;
     failures.push(desc);
   }
@@ -48,30 +51,30 @@ async function testA(desc, fn) {
 // ── Data helpers ─────────────────────────────────────────────────────────────
 
 const DATA_FILE = './classes.json';
-const FROM = process.env.MY_PHONE;
+const FROM = process.env.MY_PHONE as string;
 
-function reset() {
+function reset(): void {
   if (existsSync(DATA_FILE)) unlinkSync(DATA_FILE);
 }
 
-function getData() {
+function getData(): { classes: Record<string, ClassData>; userStates: Record<string, { step: string; pendingClass: string | null; pendingConfirmation?: unknown }>; config: Record<string, unknown> } {
   if (!existsSync(DATA_FILE)) return { classes: {}, userStates: {}, config: {} };
-  return JSON.parse(readFileSync(DATA_FILE, 'utf8'));
+  return JSON.parse(readFileSync(DATA_FILE, 'utf8')) as ReturnType<typeof getData>;
 }
 
-function getClassData(key) {
+function getClassData(key: string): ClassData | null {
   return getData().classes[key.toLowerCase()] ?? null;
 }
 
-function getPending() {
-  return getData().userStates?.[FROM]?.pendingConfirmation ?? null;
+function getPending(): { type: string; data: Record<string, unknown>; question: string } | null {
+  return (getData().userStates?.[FROM]?.pendingConfirmation ?? null) as ReturnType<typeof getPending>;
 }
 
-function getStep() {
+function getStep(): string {
   return getData().userStates?.[FROM]?.step ?? 'idle';
 }
 
-function setPendingDirectly(pendingConfirmation) {
+function setPendingDirectly(pendingConfirmation: unknown): void {
   const data = getData();
   data.userStates = data.userStates || {};
   data.userStates[FROM] = data.userStates[FROM] || { step: 'idle', pendingClass: null };
@@ -81,22 +84,22 @@ function setPendingDirectly(pendingConfirmation) {
 
 // Suppress bot console output during conversation tests
 const origLog = console.log;
-function mute() {
-  console.log = (...args) => {
+function mute(): void {
+  console.log = (...args: unknown[]) => {
     const s = args.join(' ');
     if (!s.startsWith('\nBot:') && !s.includes('PENDING') && !s.includes('[canvas]'))
       origLog(...args);
   };
 }
-function unmute() { console.log = origLog; }
+function unmute(): void { console.log = origLog; }
 
-async function say(msg) {
+async function say(msg: string): Promise<void> {
   await handleIncomingMessage(FROM, msg, null);
 }
 
-async function capture(fn) {
-  const msgs = [];
-  console.log = (...args) => {
+async function capture(fn: () => Promise<void>): Promise<string[]> {
+  const msgs: string[] = [];
+  console.log = (...args: unknown[]) => {
     const s = args.join(' ');
     if (s.includes('\nBot:')) msgs.push(s.replace(/.*\nBot: /, '').trim());
   };
@@ -106,7 +109,7 @@ async function capture(fn) {
 }
 
 // Quick class setup helper
-async function setupClass(name, syllabus = 'Homework 40%, Midterm 30%, Final 30%', curveChoice = '4') {
+async function setupClass(name: string, syllabus = 'Homework 40%, Midterm 30%, Final 30%', curveChoice = '4'): Promise<void> {
   await say(`new class: ${name}`);
   await say(syllabus);
   await say(curveChoice);
@@ -115,7 +118,13 @@ async function setupClass(name, syllabus = 'Homework 40%, Midterm 30%, Final 30%
 
 // ── classData builder for pure unit tests ────────────────────────────────────
 
-function mkClass({ categories, grades = {}, canvasGrades = {}, curve = { type: 'none' }, dynamicWeights = null } = {}) {
+function mkClass({ categories, grades = {}, canvasGrades = {}, curve = { type: 'none' as const }, dynamicWeights = null }: {
+  categories: ClassData['categories'];
+  grades?: Record<string, number[]>;
+  canvasGrades?: Record<string, number[]>;
+  curve?: Curve;
+  dynamicWeights?: DynamicWeights | null;
+}): ClassData {
   return { name: 'Test', categories, grades, canvasGrades, classAverages: {}, curve, dynamicWeights };
 }
 
@@ -134,8 +143,8 @@ test('No curve — all grades, exact weighted avg (83.0%)', () => {
   });
   const r = calcCurrentGrade(c);
   assert.ok(r, 'result should not be null');
-  assert.strictEqual(r.rawGrade, 83.0, `expected 83.0, got ${r.rawGrade}`);
-  assert.strictEqual(r.completedWeight, 100);
+  assert.strictEqual(r!.rawGrade, 83.0, `expected 83.0, got ${r!.rawGrade}`);
+  assert.strictEqual(r!.completedWeight, 100);
 });
 
 test('No curve — partial grades normalized by completed weight (88.6%)', () => {
@@ -145,8 +154,8 @@ test('No curve — partial grades normalized by completed weight (88.6%)', () =>
   });
   const r = calcCurrentGrade(c);
   // (95×40 + 80×30) / 70 = 6200/70 = 88.571 → 88.6
-  assert.strictEqual(r.rawGrade, 88.6);
-  assert.strictEqual(r.completedWeight, 70);
+  assert.strictEqual(r!.rawGrade, 88.6);
+  assert.strictEqual(r!.completedWeight, 70);
 });
 
 test('Flat curve adds points to final grade (83 + 5 = 88)', () => {
@@ -156,8 +165,8 @@ test('Flat curve adds points to final grade (83 + 5 = 88)', () => {
     curve: { type: 'flat', flatPoints: 5 },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.rawGrade, 83.0);
-  assert.strictEqual(r.curvedGrade, 88.0);
+  assert.strictEqual(r!.rawGrade, 83.0);
+  assert.strictEqual(r!.curvedGrade, 88.0);
 });
 
 test('Flat curve caps at 100', () => {
@@ -167,7 +176,7 @@ test('Flat curve caps at 100', () => {
     curve: { type: 'flat', flatPoints: 5 },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.curvedGrade, 100.0);
+  assert.strictEqual(r!.curvedGrade, 100.0);
 });
 
 test('Mean curve — positive shift applied (83 + 7 = 90)', () => {
@@ -178,8 +187,8 @@ test('Mean curve — positive shift applied (83 + 7 = 90)', () => {
   });
   // shift = 75 − 68 = 7 → 83 + 7 = 90
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.curvedGrade, 90.0);
-  assert.ok(!r.curveNoShift);
+  assert.strictEqual(r!.curvedGrade, 90.0);
+  assert.ok(!r!.curveNoShift);
 });
 
 test('Mean curve — no shift when classAvg exceeds targetMean', () => {
@@ -189,8 +198,8 @@ test('Mean curve — no shift when classAvg exceeds targetMean', () => {
     curve: { type: 'mean', targetMean: 75, classAvg: 80 },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.curvedGrade, 83.0);
-  assert.ok(r.curveNoShift, 'noShift flag should be true');
+  assert.strictEqual(r!.curvedGrade, 83.0);
+  assert.ok(r!.curveNoShift, 'noShift flag should be true');
 });
 
 test('Mean curve — pending when classAvg not yet entered', () => {
@@ -200,8 +209,8 @@ test('Mean curve — pending when classAvg not yet entered', () => {
     curve: { type: 'mean', targetMean: 75, classAvg: null },
   });
   const r = calcCurrentGrade(c);
-  assert.ok(r.curvePending);
-  assert.strictEqual(r.curvedLetter, null);
+  assert.ok(r!.curvePending);
+  assert.strictEqual(r!.curvedLetter, null);
 });
 
 test('Mean curve — caps at 100 when shift would exceed it', () => {
@@ -212,7 +221,7 @@ test('Mean curve — caps at 100 when shift would exceed it', () => {
   });
   // shift = 15 → 98 + 15 = 113 → capped at 100
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.curvedGrade, 100.0);
+  assert.strictEqual(r!.curvedGrade, 100.0);
 });
 
 test('Norm curve — above-median maps to higher letter (83, median=75, B → B+)', () => {
@@ -226,8 +235,8 @@ test('Norm curve — above-median maps to higher letter (83, median=75, B → B+
     curve: { type: 'norm', median: 75, mappedGrade: 'B' },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.curvedLetter, 'B+');
-  assert.ok(!r.curvePending);
+  assert.strictEqual(r!.curvedLetter, 'B+');
+  assert.ok(!r!.curvePending);
 });
 
 test('Norm curve — below-median maps to lower letter (60, median=75, B → B-)', () => {
@@ -239,7 +248,7 @@ test('Norm curve — below-median maps to lower letter (60, median=75, B → B-)
     curve: { type: 'norm', median: 75, mappedGrade: 'B' },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.curvedLetter, 'B-');
+  assert.strictEqual(r!.curvedLetter, 'B-');
 });
 
 test('Norm curve — at exactly median returns mapped letter', () => {
@@ -249,7 +258,7 @@ test('Norm curve — at exactly median returns mapped letter', () => {
     curve: { type: 'norm', median: 75, mappedGrade: 'B' },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.curvedLetter, 'B');
+  assert.strictEqual(r!.curvedLetter, 'B');
 });
 
 test('Norm curve — letter-only (median=null, mappedGrade set) shows target', () => {
@@ -259,9 +268,9 @@ test('Norm curve — letter-only (median=null, mappedGrade set) shows target', (
     curve: { type: 'norm', median: null, mappedGrade: 'B+' },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.curvedLetter, 'B+');
-  assert.ok(!r.curvePending);
-  assert.ok(r.curveNote.includes('no numeric median'));
+  assert.strictEqual(r!.curvedLetter, 'B+');
+  assert.ok(!r!.curvePending);
+  assert.ok(r!.curveNote.includes('no numeric median'));
 });
 
 test('Norm curve — pending when neither median nor mappedGrade set', () => {
@@ -271,8 +280,8 @@ test('Norm curve — pending when neither median nor mappedGrade set', () => {
     curve: { type: 'norm' },
   });
   const r = calcCurrentGrade(c);
-  assert.ok(r.curvePending);
-  assert.strictEqual(r.curvedLetter, null);
+  assert.ok(r!.curvePending);
+  assert.strictEqual(r!.curvedLetter, null);
 });
 
 test('Norm curve — pending when median set but mappedGrade missing', () => {
@@ -282,7 +291,7 @@ test('Norm curve — pending when median set but mappedGrade missing', () => {
     curve: { type: 'norm', median: 75 },
   });
   const r = calcCurrentGrade(c);
-  assert.ok(r.curvePending);
+  assert.ok(r!.curvePending);
 });
 
 test('calcCurrentGrade — returns null when no grades entered', () => {
@@ -296,7 +305,7 @@ test('Multiple grades in same category are averaged', () => {
     grades: { homework: [80, 90, 100] },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.rawGrade, 90.0);
+  assert.strictEqual(r!.rawGrade, 90.0);
 });
 
 test('calcNeeded — A not achievable returns > 100', () => {
@@ -306,7 +315,7 @@ test('calcNeeded — A not achievable returns > 100', () => {
   });
   // needed for 93 = (93×100 − 6200) / 30 = 103.3
   const needed = calcNeeded(c, 93);
-  assert.ok(needed > 100, `expected > 100, got ${needed}`);
+  assert.ok(needed! > 100, `expected > 100, got ${needed}`);
 });
 
 test('calcNeeded — B achievable (need 70 on final)', () => {
@@ -363,7 +372,7 @@ test('calcBestPossible — fills remaining categories with 100 (result: 92.0%)',
   // Best: Final=100 → (95×40 + 80×30 + 100×30)/100 = 92.0
   const r = calcBestPossible(c);
   assert.ok(r, 'should not be null');
-  assert.strictEqual(r.rawGrade, 92.0);
+  assert.strictEqual(r!.rawGrade, 92.0);
 });
 
 test('calcBestPossible — returns null when all grades entered', () => {
@@ -395,8 +404,8 @@ test('Drop-lowest — excludes minimum score from average', () => {
   });
   // HW: drop 70 → avg(80,90)=85 → (85×40+80×30+70×30)/100 = 79.0
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.rawGrade, 79.0);
-  assert.strictEqual(r.breakdown.find(b => b.name === 'Homework').droppedCount, 1);
+  assert.strictEqual(r!.rawGrade, 79.0);
+  assert.strictEqual(r!.breakdown.find(b => b.name === 'Homework')!.droppedCount, 1);
 });
 
 test('Drop-lowest — not applied when fewer grades than drop count', () => {
@@ -406,8 +415,8 @@ test('Drop-lowest — not applied when fewer grades than drop count', () => {
   });
   // Only 1 grade, dropLowest=2 → no drop → avg=80
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.rawGrade, 80.0);
-  assert.strictEqual(r.breakdown[0].droppedCount, 0);
+  assert.strictEqual(r!.rawGrade, 80.0);
+  assert.strictEqual(r!.breakdown[0].droppedCount, 0);
 });
 
 test('Canvas grades and manual grades merged for calculation', () => {
@@ -418,12 +427,12 @@ test('Canvas grades and manual grades merged for calculation', () => {
   });
   // merged: HW=90, Midterm=80 → (90×50+80×50)/100 = 85.0
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.rawGrade, 85.0);
-  assert.strictEqual(r.completedWeight, 100);
+  assert.strictEqual(r!.rawGrade, 85.0);
+  assert.strictEqual(r!.completedWeight, 100);
 });
 
 test('Dynamic weights — best midterm gets higher weight (80.5%)', () => {
-  const c = {
+  const c: ClassData = {
     name: 'Test',
     categories: [
       { name: 'Midterm A', weight: 22.5 },
@@ -445,11 +454,11 @@ test('Dynamic weights — best midterm gets higher weight (80.5%)', () => {
   // Midterm A (90) → 25%, Midterm B (70) → 20%, Final (80) → 55%
   // (90×25 + 70×20 + 80×55)/100 = (2250+1400+4400)/100 = 80.5
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.rawGrade, 80.5);
+  assert.strictEqual(r!.rawGrade, 80.5);
 });
 
 test('calcGPA — weighted average across classes (3.6)', () => {
-  const classes = {
+  const classes: Record<string, ClassData> = {
     'bio 101': {
       ...mkClass({ categories: [{ name: 'Final', weight: 100 }], grades: { final: [95] } }),
       name: 'Bio 101', creditHours: 3,
@@ -466,7 +475,7 @@ test('calcGPA — weighted average across classes (3.6)', () => {
 });
 
 test('calcGPA — reports classes missing credit hours', () => {
-  const classes = {
+  const classes: Record<string, ClassData> = {
     'bio 101': {
       ...mkClass({ categories: [{ name: 'Final', weight: 100 }], grades: { final: [95] } }),
       name: 'Bio 101',
@@ -479,7 +488,7 @@ test('calcGPA — reports classes missing credit hours', () => {
 });
 
 test('calcGPA — skips classes with no grades', () => {
-  const classes = {
+  const classes: Record<string, ClassData> = {
     'bio 101': {
       ...mkClass({ categories: [{ name: 'Final', weight: 100 }], grades: {} }),
       name: 'Bio 101', creditHours: 3,
@@ -499,9 +508,9 @@ await testA('New class setup — categories saved correctly', async () => {
   unmute();
   const cd = getClassData('bio 101');
   assert.ok(cd, 'class should exist');
-  assert.strictEqual(cd.categories.length, 3);
-  assert.ok(cd.categories.find(c => c.name.toLowerCase().includes('homework')));
-  assert.strictEqual(cd.curve.type, 'none');
+  assert.strictEqual(cd!.categories.length, 3);
+  assert.ok(cd!.categories.find(c => c.name.toLowerCase().includes('homework')));
+  assert.strictEqual(cd!.curve.type, 'none');
 });
 
 await testA('Flat curve — flatPoints saved correctly', async () => {
@@ -513,8 +522,8 @@ await testA('Flat curve — flatPoints saved correctly', async () => {
   await say('no');
   unmute();
   const cd = getClassData('math 101');
-  assert.strictEqual(cd.curve.type, 'flat');
-  assert.strictEqual(cd.curve.flatPoints, 5);
+  assert.strictEqual(cd!.curve.type, 'flat');
+  assert.strictEqual(cd!.curve.flatPoints, 5);
 });
 
 await testA('Mean curve — targetMean saved correctly', async () => {
@@ -526,8 +535,8 @@ await testA('Mean curve — targetMean saved correctly', async () => {
   await say('no');
   unmute();
   const cd = getClassData('chem 201');
-  assert.strictEqual(cd.curve.type, 'mean');
-  assert.strictEqual(cd.curve.targetMean, 75);
+  assert.strictEqual(cd!.curve.type, 'mean');
+  assert.strictEqual(cd!.curve.targetMean, 75);
 });
 
 await testA('Norm curve — curve.type=norm saved', async () => {
@@ -538,7 +547,7 @@ await testA('Norm curve — curve.type=norm saved', async () => {
   await say('no');
   unmute();
   const cd = getClassData('physics 101');
-  assert.strictEqual(cd.curve.type, 'norm');
+  assert.strictEqual(cd!.curve.type, 'norm');
 });
 
 await testA('Enter grade — saves to correct category', async () => {
@@ -547,7 +556,7 @@ await testA('Enter grade — saves to correct category', async () => {
   await say('got 85 on bio midterm');
   unmute();
   const cd = getClassData('bio 101');
-  const grades = cd.grades.midterm ?? [];
+  const grades = cd!.grades.midterm ?? [];
   assert.ok(grades.includes(85), `grades=${JSON.stringify(grades)}`);
 });
 
@@ -558,7 +567,7 @@ await testA('Enter grade — multiple grades averaged in display', async () => {
   await say('got 100 on bio homework');
   unmute();
   const cd = getClassData('bio 101');
-  assert.deepStrictEqual(cd.grades.homework, [80, 100]);
+  assert.deepStrictEqual(cd!.grades.homework, [80, 100]);
 });
 
 await testA('Class average saved to curve.classAvg for mean curve', async () => {
@@ -570,7 +579,7 @@ await testA('Class average saved to curve.classAvg for mean curve', async () => 
   await say('class average was 68 on chem midterm');
   unmute();
   const cd = getClassData('chem 201');
-  assert.strictEqual(cd.curve.classAvg, 68);
+  assert.strictEqual(cd!.curve.classAvg, 68);
 });
 
 await testA('Syllabus update — preserves grades, updates weights', async () => {
@@ -581,9 +590,9 @@ await testA('Syllabus update — preserves grades, updates weights', async () =>
   await say('Homework 30%, Midterm 40%, Final 30%');
   unmute();
   const cd = getClassData('bio 101');
-  assert.ok((cd.grades.midterm ?? []).includes(85), 'grade should survive update');
-  const midCat = cd.categories.find(c => c.name.toLowerCase().includes('midterm'));
-  assert.strictEqual(midCat.weight, 40, 'weight should be updated');
+  assert.ok((cd!.grades.midterm ?? []).includes(85), 'grade should survive update');
+  const midCat = cd!.categories.find(c => c.name.toLowerCase().includes('midterm'));
+  assert.strictEqual(midCat!.weight, 40, 'weight should be updated');
 });
 
 await testA('Undo — creates confirm_undo pending with last action', async () => {
@@ -594,9 +603,9 @@ await testA('Undo — creates confirm_undo pending with last action', async () =
   unmute();
   const pc = getPending();
   assert.ok(pc, 'should have pending confirmation');
-  assert.strictEqual(pc.type, 'confirm_undo');
-  assert.ok(pc.data?.last, 'should contain last action');
-  assert.strictEqual(pc.data.last.type, 'grade_saved');
+  assert.strictEqual(pc!.type, 'confirm_undo');
+  assert.ok(pc!.data?.last, 'should contain last action');
+  assert.strictEqual((pc!.data.last as { type: string }).type, 'grade_saved');
 });
 
 await testA('Undo confirm yes — grade removed', async () => {
@@ -637,8 +646,8 @@ await testA('awaiting_numeric_median — plain number saves median + letter', as
   writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
   mute(); await say('72'); unmute();
   const cd = getClassData('ds');
-  assert.strictEqual(cd.curve.median, 72);
-  assert.strictEqual(cd.curve.mappedGrade, 'B+');
+  assert.strictEqual(cd!.curve.median, 72);
+  assert.strictEqual(cd!.curve.mappedGrade, 'B+');
 });
 
 await testA('awaiting_numeric_median — "skip" saves letter only, no median', async () => {
@@ -656,8 +665,8 @@ await testA('awaiting_numeric_median — "skip" saves letter only, no median', a
   writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
   mute(); await say('skip'); unmute();
   const cd = getClassData('ds');
-  assert.strictEqual(cd.curve.mappedGrade, 'B+');
-  assert.ok(cd.curve.median == null, 'median should not be set');
+  assert.strictEqual(cd!.curve.mappedGrade, 'B+');
+  assert.ok(cd!.curve.median == null, 'median should not be set');
 });
 
 await testA('awaiting_numeric_median — non-number re-prompts without clearing state', async () => {
@@ -677,7 +686,7 @@ await testA('awaiting_numeric_median — non-number re-prompts without clearing 
   // State should still have the pending confirmation
   const pc = getPending();
   assert.ok(pc, 'pending should be re-saved');
-  assert.strictEqual(pc.type, 'awaiting_numeric_median');
+  assert.strictEqual(pc!.type, 'awaiting_numeric_median');
 });
 
 await testA('Canvas resync offer — undo canvas link triggers resync question', async () => {
@@ -686,7 +695,8 @@ await testA('Canvas resync offer — undo canvas link triggers resync question',
   unmute();
   // Simulate a canvas_linked last action
   const data = getData();
-  data.lastAction = {
+  data.classes['bio 101'].lastSyncedAt = undefined as unknown as string;
+  (data as unknown as { lastAction: unknown }).lastAction = {
     type: 'canvas_linked',
     classKey: 'bio 101',
     className: 'Bio 101',
@@ -697,7 +707,7 @@ await testA('Canvas resync offer — undo canvas link triggers resync question',
   mute(); await say('undo'); await say('yes'); unmute();
   const pc = getPending();
   assert.ok(pc, 'should offer resync');
-  assert.strictEqual(pc.type, 'canvas_resync_offer');
+  assert.strictEqual(pc!.type, 'canvas_resync_offer');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -730,7 +740,7 @@ await testA('"class average was 72 on chem midterm" → classAverages saved', as
   await say('class average was 72 on chem midterm');
   unmute();
   const cd = getClassData('chem 201');
-  assert.strictEqual(cd.classAverages?.midterm, 72);
+  assert.strictEqual(cd!.classAverages?.midterm, 72);
 });
 
 await testA('"delete bio" → confirm_delete pending', async () => {
@@ -740,8 +750,8 @@ await testA('"delete bio" → confirm_delete pending', async () => {
   unmute();
   const pc = getPending();
   assert.ok(pc);
-  assert.strictEqual(pc.type, 'confirm_delete');
-  assert.strictEqual(pc.data.classKey, 'bio 101');
+  assert.strictEqual(pc!.type, 'confirm_delete');
+  assert.strictEqual(pc!.data.classKey, 'bio 101');
 });
 
 await testA('"reset" → confirm_reset pending', async () => {
@@ -751,7 +761,7 @@ await testA('"reset" → confirm_reset pending', async () => {
   unmute();
   const pc = getPending();
   assert.ok(pc);
-  assert.strictEqual(pc.type, 'confirm_reset');
+  assert.strictEqual(pc!.type, 'confirm_reset');
 });
 
 await testA('"undo" after grade entry → confirm_undo pending', async () => {
@@ -762,7 +772,7 @@ await testA('"undo" after grade entry → confirm_undo pending', async () => {
   unmute();
   const pc = getPending();
   assert.ok(pc);
-  assert.strictEqual(pc.type, 'confirm_undo');
+  assert.strictEqual(pc!.type, 'confirm_undo');
 });
 
 await testA('"show all my grades" → no crash', async () => {
@@ -790,7 +800,7 @@ await testA('"bio is 3 credits" → creditHours saved', async () => {
   await say('bio is 3 credits');
   unmute();
   const cd = getClassData('bio 101');
-  assert.strictEqual(cd.creditHours, 3);
+  assert.strictEqual(cd!.creditHours, 3);
 });
 
 await testA('"what if I got 90 on bio final" → hypothetical no crash', async () => {
@@ -865,7 +875,7 @@ await testA('Existing class re-setup asks restart/keep', async () => {
   unmute();
   const pc = getPending();
   assert.ok(pc);
-  assert.strictEqual(pc.type, 'new_class_mode');
+  assert.strictEqual(pc!.type, 'new_class_mode');
 });
 
 await testA('Reset 1 clears all classes', async () => {
@@ -906,8 +916,8 @@ await testA('Canvas sync does not wipe manual grades', async () => {
   writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
   // Manual grade in grades.midterm should still be there
   const cd = getClassData('bio 101');
-  assert.ok((cd.grades?.midterm ?? []).includes(85), 'manual grade should survive canvas write');
-  assert.deepStrictEqual(cd.canvasGrades?.homework, [90]);
+  assert.ok((cd!.grades?.midterm ?? []).includes(85), 'manual grade should survive canvas write');
+  assert.deepStrictEqual(cd!.canvasGrades?.homework, [90]);
 });
 
 test('Norm curve letter-only — calcBestPossible still works', () => {
@@ -918,7 +928,7 @@ test('Norm curve letter-only — calcBestPossible still works', () => {
   });
   const r = calcBestPossible(c);
   assert.ok(r, 'best possible should work with letter-only norm curve');
-  assert.strictEqual(r.curvedLetter, 'B+');
+  assert.strictEqual(r!.curvedLetter, 'B+');
 });
 
 test('Single grade entered — completedWeight reflects only that category', () => {
@@ -927,8 +937,8 @@ test('Single grade entered — completedWeight reflects only that category', () 
     grades: { midterm: [80] },
   });
   const r = calcCurrentGrade(c);
-  assert.strictEqual(r.completedWeight, 30);
-  assert.strictEqual(r.rawGrade, 80.0);
+  assert.strictEqual(r!.completedWeight, 30);
+  assert.strictEqual(r!.rawGrade, 80.0);
 });
 
 // ── Bug #1: plain number auto-routed to norm median ──────────────────────────
@@ -942,9 +952,9 @@ await testA('Plain number with one norm class missing median → norm_median_fro
   unmute();
   const pc = getPending();
   assert.ok(pc, 'should have pending');
-  assert.strictEqual(pc.type, 'norm_median_from_number');
-  assert.strictEqual(pc.data.num, 80);
-  assert.strictEqual(pc.data.classKey, 'ds');
+  assert.strictEqual(pc!.type, 'norm_median_from_number');
+  assert.strictEqual(pc!.data.num, 80);
+  assert.strictEqual(pc!.data.classKey, 'ds');
 });
 
 await testA('norm_median_from_number yes → median saved', async () => {
@@ -956,7 +966,7 @@ await testA('norm_median_from_number yes → median saved', async () => {
   await say('yes');
   unmute();
   const cd = getClassData('ds');
-  assert.strictEqual(cd.curve.median, 80);
+  assert.strictEqual(cd!.curve.median, 80);
 });
 
 await testA('norm_median_from_number no → no median saved', async () => {
@@ -968,7 +978,7 @@ await testA('norm_median_from_number no → no median saved', async () => {
   await say('no');
   unmute();
   const cd = getClassData('ds');
-  assert.ok(cd.curve?.median == null, 'median should not be saved');
+  assert.ok(cd!.curve?.median == null, 'median should not be saved');
 });
 
 await testA('Plain number with multiple norm classes → norm_median_class_choice pending', async () => {
@@ -983,9 +993,9 @@ await testA('Plain number with multiple norm classes → norm_median_class_choic
   unmute();
   const pc = getPending();
   assert.ok(pc, 'should have pending');
-  assert.strictEqual(pc.type, 'norm_median_class_choice');
-  assert.strictEqual(pc.data.num, 72);
-  assert.strictEqual(pc.data.classes.length, 2);
+  assert.strictEqual(pc!.type, 'norm_median_class_choice');
+  assert.strictEqual(pc!.data.num, 72);
+  assert.strictEqual((pc!.data.classes as unknown[]).length, 2);
 });
 
 await testA('norm_median_class_choice by number → saves median for chosen class', async () => {
@@ -1025,9 +1035,9 @@ test('Norm letter-only: applyCurveToFinal shows curved letter, not pending', () 
     curve: { type: 'norm', median: null, mappedGrade: 'B+' },
   });
   const r = calcCurrentGrade(c);
-  assert.ok(!r.curvePending, 'should NOT be pending when mappedGrade is set');
-  assert.strictEqual(r.curvedLetter, 'B+');
-  assert.ok(r.curveNote.includes('no numeric median'));
+  assert.ok(!r!.curvePending, 'should NOT be pending when mappedGrade is set');
+  assert.strictEqual(r!.curvedLetter, 'B+');
+  assert.ok(r!.curveNote.includes('no numeric median'));
 });
 
 await testA('Norm letter-only: grade display says Curved: not Curve pending', async () => {
@@ -1069,9 +1079,9 @@ await testA('awaiting_numeric_median skip → hint message includes how to set l
 // ── Dedup logic ──────────────────────────────────────────────────────────────
 
 test('Dedup: isSeen returns false first call, true second call for same key', () => {
-  const map = new Map();
+  const map = new Map<string, number>();
   const TTL = 30_000;
-  function isSeen(key) {
+  function isSeen(key: string): boolean {
     const t = map.get(key);
     return t !== undefined && Date.now() - t < TTL;
   }
@@ -1081,9 +1091,9 @@ test('Dedup: isSeen returns false first call, true second call for same key', ()
 });
 
 test('Dedup: different content keys are not duplicates', () => {
-  const map = new Map();
+  const map = new Map<string, number>();
   const TTL = 30_000;
-  function isSeen(key) {
+  function isSeen(key: string): boolean {
     const t = map.get(key);
     return t !== undefined && Date.now() - t < TTL;
   }

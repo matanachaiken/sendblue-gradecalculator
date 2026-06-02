@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "description": "iMessage grade calculator bot powered by Sendblue and Claude AI",
   "type": "module",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node --watch index.js"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "node dist/test.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
@@ -14,5 +16,11 @@
     "express": "^4.18.2",
     "pdf-parse": "^1.1.1",
     "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
   }
 }

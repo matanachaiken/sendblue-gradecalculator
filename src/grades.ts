@@ -1,11 +1,13 @@
-// grades.js — Grade math: weighted averages, curves applied to final grade, projections
+// grades.ts — Grade math: weighted averages, curves applied to final grade, projections
 
-function avg(arr) {
+import type { ClassData, Category, Curve, DynamicWeights, GradeResult, BreakdownItem, CurveResult, GpaResult, GpaEntry } from './types.js';
+
+function avg(arr: number[]): number | null {
   if (!arr || arr.length === 0) return null;
   return arr.reduce((sum, v) => sum + v, 0) / arr.length;
 }
 
-function r1(n) {
+function r1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
@@ -24,9 +26,9 @@ const GRADE_SCALE = ['A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
  *
  * Returns: { [catKey]: { weight: number, note: string|null } }
  */
-function getEffectiveWeights(classData) {
+function getEffectiveWeights(classData: ClassData): Record<string, { weight: number; note: string | null }> {
   const { categories, grades = {}, dynamicWeights } = classData;
-  const result = {};
+  const result: Record<string, { weight: number; note: string | null }> = {};
   for (const cat of categories) {
     result[cat.name.toLowerCase()] = { weight: cat.weight, note: null };
   }
@@ -65,15 +67,8 @@ function getEffectiveWeights(classData) {
  *   mean  — shift by (targetMean - classAvg), never negative, cap at 100
  *   norm  — map position relative to median to a letter grade
  *   none  — no adjustment
- *
- * @returns {{
- *   curvedGrade:  number,       // numeric result (unchanged for norm/none)
- *   curvedLetter: string|null,  // letter grade (null when not applicable or pending)
- *   pending:      boolean,      // true if required curve data hasn't been entered yet
- *   note:         string        // human-readable description
- * }}
  */
-function applyCurveToFinal(rawGrade, curve) {
+function applyCurveToFinal(rawGrade: number, curve: Curve | undefined): CurveResult {
   if (!curve || curve.type === 'none') {
     return { curvedGrade: rawGrade, curvedLetter: null, pending: false, note: '' };
   }
@@ -117,7 +112,7 @@ function applyCurveToFinal(rawGrade, curve) {
       return { curvedGrade: rawGrade, curvedLetter: null, pending: true, note: `Unrecognized mapped grade "${curve.mappedGrade}"` };
     }
 
-    let curvedLetter;
+    let curvedLetter: string;
     if (rawGrade >= curve.median) {
       const distanceAbove = rawGrade - curve.median;
       const roomAbove = 100 - curve.median;
@@ -145,15 +140,15 @@ function applyCurveToFinal(rawGrade, curve) {
   return { curvedGrade: rawGrade, curvedLetter: null, pending: false, note: '' };
 }
 
-function applyDropLowest(grades, dropLowest) {
+function applyDropLowest(grades: number[], dropLowest: number | undefined): number[] {
   if (!dropLowest || grades.length <= dropLowest) return grades;
   return [...grades].sort((a, b) => a - b).slice(dropLowest);
 }
 
-function mergeGrades(classData) {
+function mergeGrades(classData: ClassData): Record<string, number[]> {
   const manual = classData.grades || {};
   const canvas = classData.canvasGrades || {};
-  const merged = {};
+  const merged: Record<string, number[]> = {};
   const keys = new Set([...Object.keys(manual), ...Object.keys(canvas)]);
   for (const key of keys) {
     merged[key] = [...(manual[key] || []), ...(canvas[key] || [])];
@@ -164,24 +159,14 @@ function mergeGrades(classData) {
 /**
  * Calculate the current weighted grade.
  * Curves are applied to the final grade, not per category.
- *
- * @returns {{
- *   rawGrade:       number,
- *   curvedGrade:    number,
- *   curvedLetter:   string|null,
- *   curvePending:   boolean,
- *   curveNote:      string,
- *   completedWeight: number,
- *   breakdown:      Array
- * } | null}
  */
-export function calcCurrentGrade(classData) {
+export function calcCurrentGrade(classData: ClassData): GradeResult | null {
   const { categories } = classData;
   const grades = mergeGrades(classData);
 
   let weightedSum = 0;
   let completedWeight = 0;
-  const breakdown = [];
+  const breakdown: BreakdownItem[] = [];
 
   const effectiveWeights = getEffectiveWeights(classData);
 
@@ -191,15 +176,16 @@ export function calcCurrentGrade(classData) {
     if (!catGrades || catGrades.length === 0) continue;
 
     const effectiveGrades = applyDropLowest(catGrades, cat.dropLowest);
-    const rawAvg = avg(effectiveGrades); // full precision — do not round here
+    const rawAvgVal = avg(effectiveGrades); // full precision — do not round here
+    if (rawAvgVal === null) continue;
     const { weight, note } = effectiveWeights[key];
-    weightedSum += rawAvg * weight;
+    weightedSum += rawAvgVal * weight;
     completedWeight += weight;
 
     breakdown.push({
       name: cat.name,
       weight,
-      rawAvg: r1(rawAvg), // round only for display in the breakdown
+      rawAvg: r1(rawAvgVal), // round only for display in the breakdown
       count: effectiveGrades.length,
       droppedCount: catGrades.length - effectiveGrades.length,
       weightNote: note,
@@ -230,7 +216,7 @@ export function calcCurrentGrade(classData) {
  * Returns null for norm curves (letter-based, can't project numerically)
  * or when nothing is left to grade.
  */
-export function calcNeeded(classData, targetCurvedGrade) {
+export function calcNeeded(classData: ClassData, targetCurvedGrade: number): number | null {
   const { categories, curve } = classData;
   const grades = mergeGrades(classData);
 
@@ -258,8 +244,11 @@ export function calcNeeded(classData, targetCurvedGrade) {
     const catGrades = grades[key];
     if (catGrades && catGrades.length > 0) {
       const { weight } = effectiveWeights[key];
-      completedSum += avg(applyDropLowest(catGrades, cat.dropLowest)) * weight;
-      completedWeight += weight;
+      const avgVal = avg(applyDropLowest(catGrades, cat.dropLowest));
+      if (avgVal !== null) {
+        completedSum += avgVal * weight;
+        completedWeight += weight;
+      }
     } else {
       remainingWeight += cat.weight; // base weight for projection of ungraded work
     }
@@ -276,7 +265,7 @@ export function calcNeeded(classData, targetCurvedGrade) {
  * Calculate the best possible grade assuming 100 on all remaining assignments.
  * Returns same shape as calcCurrentGrade, or null if all categories already have grades.
  */
-export function calcBestPossible(classData) {
+export function calcBestPossible(classData: ClassData): GradeResult | null {
   const merged = mergeGrades(classData);
   const hasRemaining = classData.categories.some(cat => {
     const key = cat.name.toLowerCase();
@@ -284,7 +273,7 @@ export function calcBestPossible(classData) {
   });
   if (!hasRemaining) return null;
 
-  const clone = { ...classData, grades: {}, canvasGrades: {} };
+  const clone: ClassData = { ...classData, grades: {}, canvasGrades: {} };
   for (const cat of classData.categories) {
     const key = cat.name.toLowerCase();
     clone.grades[key] = merged[key]?.length > 0 ? [...merged[key]] : [100];
@@ -292,7 +281,7 @@ export function calcBestPossible(classData) {
   return calcCurrentGrade(clone);
 }
 
-const GPA_POINTS = {
+const GPA_POINTS: Record<string, number> = {
   'A': 4.0, 'A-': 3.7,
   'B+': 3.3, 'B': 3.0, 'B-': 2.7,
   'C+': 2.3, 'C': 2.0, 'C-': 1.7,
@@ -302,18 +291,11 @@ const GPA_POINTS = {
 
 /**
  * Calculate semester GPA across all classes.
- *
- * @returns {{
- *   gpa:      number|null,
- *   included: Array<{name, letter, gpaPoints, creditHours}>,
- *   missing:  string[],   // class names with grades but no credit hours set
- *   noGrades: string[],   // class names with no grades entered yet
- * }}
  */
-export function calcGPA(classes) {
-  const included = [];
-  const missing = [];
-  const noGrades = [];
+export function calcGPA(classes: Record<string, ClassData>): GpaResult {
+  const included: GpaEntry[] = [];
+  const missing: string[] = [];
+  const noGrades: string[] = [];
 
   for (const classData of Object.values(classes)) {
     const result = calcCurrentGrade(classData);
@@ -340,7 +322,7 @@ export function calcGPA(classes) {
 /**
  * Map a numeric percentage to a letter grade using standard cutoffs.
  */
-export function getLetterGrade(pct) {
+export function getLetterGrade(pct: number): string {
   if (pct >= 93) return 'A';
   if (pct >= 90) return 'A-';
   if (pct >= 87) return 'B+';

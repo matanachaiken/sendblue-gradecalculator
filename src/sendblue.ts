@@ -1,4 +1,4 @@
-// sendblue.js — Wrapper for the Sendblue iMessage API
+// sendblue.ts — Wrapper for the Sendblue iMessage API
 import axios from 'axios';
 import dotenv from 'dotenv';
 
@@ -9,10 +9,10 @@ const SENDBLUE_URL = 'https://api.sendblue.co/api/send-message';
 /**
  * Send an iMessage via the Sendblue API.
  *
- * @param {string} to   - Recipient phone number in E.164 format (e.g. +12025551234)
- * @param {string} text - Message text to send
+ * @param to   - Recipient phone number in E.164 format (e.g. +12025551234)
+ * @param text - Message text to send
  */
-export async function sendMessage(to, text) {
+export async function sendMessage(to: string, text: string): Promise<void> {
   // TEST_MODE: print to console instead of calling the API
   if (process.env.TEST_MODE === 'true') {
     console.log(`\nBot: ${text}`);
@@ -37,7 +37,8 @@ export async function sendMessage(to, text) {
     );
   } catch (err) {
     // Log the error but don't crash the bot
-    console.error('Sendblue error:', err.response?.data || err.message);
+    const e = err as { response?: { data?: unknown }; message?: string };
+    console.error('Sendblue error:', e.response?.data || e.message);
     throw err;
   }
 }
