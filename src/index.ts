@@ -110,7 +110,7 @@ const app = express();
 app.use(express.json());
 app.get('/', (_req: Request, res: Response) => res.send('grade-brain is running'));
 
-app.post('/webhook', async (req: Request, res: Response) => {
+async function handleWebhook(req: Request, res: Response) {
   res.sendStatus(200);
 
   const body = req.body as Record<string, unknown>;
@@ -151,7 +151,12 @@ app.post('/webhook', async (req: Request, res: Response) => {
     const e = err as { message?: string };
     console.error('Error handling message:', e.message);
   }
-});
+}
+
+// Mount the webhook on both '/' and '/webhook' so it works regardless of how
+// the Sendblue dashboard webhook URL is configured.
+app.post('/', handleWebhook);
+app.post('/webhook', handleWebhook);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 

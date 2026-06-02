@@ -141,6 +141,10 @@
     "+18453908436": {
       "step": "idle",
       "pendingClass": null
+    },
+    "+16464042794": {
+      "step": "awaiting_syllabus",
+      "pendingClass": "gabagool"
     }
   },
   "config": {
