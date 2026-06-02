@@ -316,7 +316,7 @@ async function handlePendingConfirmation(from, pc, answer, state) {
       if (isSkip) {
         cdNorm.curve = { ...cdNorm.curve, mappedGrade: letter };
         saveClass(classKey, cdNorm);
-        await sendMessage(from, `Got it — target grade is ${letter} for ${cdNorm.name}. Grade display will show your target but can't do relative positioning without a numeric median.`);
+        await sendMessage(from, `Got it — target grade is ${letter} for ${cdNorm.name}. If you get the numeric median later just text it like: "class median was 72 for ${cdNorm.name.toLowerCase()}"`);
         await showGrade(from, classKey);
       } else if (!isNaN(median)) {
         cdNorm.curve = { ...cdNorm.curve, median, mappedGrade: letter };
@@ -442,6 +442,70 @@ async function handlePendingConfirmation(from, pc, answer, state) {
         await offerCanvas(from, className, '');
       } else {
         await sendMessage(from, 'OK. Text "connect canvas" any time to re-link.');
+      }
+      break;
+    }
+
+    case 'norm_median_from_number': {
+      const { classKey, num } = pc.data;
+      if (isYes) {
+        const cd = getClass(classKey);
+        if (!cd) break;
+        const previousValue = cd.curve?.median ?? null;
+        cd.curve = { ...cd.curve, median: num };
+        saveClass(classKey, cd);
+        saveLastAction({ type: 'class_average_saved', classKey, className: cd.name, field: 'curve.median', previousValue, newValue: num, label: 'class median' });
+        await sendMessage(from, `Saved — class median ${num} for ${cd.name}.`);
+        if (!cd.curve.mappedGrade) {
+          const q = `What letter grade does the professor map that median to for ${cd.name}? (e.g. B+)`;
+          setPendingConfirmation(from, { type: 'norm_mapped_grade', data: { classKey, median: num }, question: q });
+          console.log('SAVED PENDING:', 'norm_mapped_grade', classKey);
+          await sendMessage(from, q);
+        } else {
+          await showGrade(from, classKey);
+        }
+      } else if (isNo) {
+        await sendMessage(from, `OK — what did you mean? Try: "class median was 72 for data structures"`);
+      } else {
+        setPendingConfirmation(from, pc);
+        await sendMessage(from, 'Reply "yes" or "no".');
+      }
+      break;
+    }
+
+    case 'norm_median_class_choice': {
+      const { num, classes } = pc.data;
+      const idx = parseInt(answer.trim()) - 1;
+      let selected = null;
+
+      if (!isNaN(idx) && idx >= 0 && idx < classes.length) {
+        selected = classes[idx];
+      } else {
+        selected = classes.find(c => c.name.toLowerCase().includes(lower));
+      }
+
+      if (!selected) {
+        setPendingConfirmation(from, pc);
+        const list = classes.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+        await sendMessage(from, `Didn't recognize that. Reply with a number:\n${list}`);
+        return;
+      }
+
+      const { classKey: chosenKey, name: chosenName } = selected;
+      const cd = getClass(chosenKey);
+      if (!cd) break;
+      const previousValue = cd.curve?.median ?? null;
+      cd.curve = { ...cd.curve, median: num };
+      saveClass(chosenKey, cd);
+      saveLastAction({ type: 'class_average_saved', classKey: chosenKey, className: chosenName, field: 'curve.median', previousValue, newValue: num, label: 'class median' });
+      await sendMessage(from, `Saved — class median ${num} for ${chosenName}.`);
+      if (!cd.curve.mappedGrade) {
+        const q = `What letter grade does the professor map that median to for ${chosenName}? (e.g. B+)`;
+        setPendingConfirmation(from, { type: 'norm_mapped_grade', data: { classKey: chosenKey, median: num }, question: q });
+        console.log('SAVED PENDING:', 'norm_mapped_grade', chosenKey);
+        await sendMessage(from, q);
+      } else {
+        await showGrade(from, chosenKey);
       }
       break;
     }
@@ -1263,6 +1327,30 @@ async function handleIntent(from, text, intent) {
     return;
   }
 
+  // If the message looks like a plain number, check for norm classes missing a median
+  const numericInput = parseFloat(text);
+  if (!isNaN(numericInput) && numericInput >= 0 && numericInput <= 150 && /^\d+(\.\d+)?$/.test(text)) {
+    const all = getAllClasses();
+    const normNoMedian = Object.entries(all).filter(([, c]) => c.curve?.type === 'norm' && c.curve?.median == null);
+
+    if (normNoMedian.length === 1) {
+      const [classKey, classData] = normNoMedian[0];
+      const q = `Is ${numericInput} the class median for ${classData.name}? (yes/no)`;
+      setPendingConfirmation(from, { type: 'norm_median_from_number', data: { classKey, num: numericInput }, question: q });
+      console.log('SAVED PENDING:', 'norm_median_from_number', classKey);
+      await sendMessage(from, q);
+      return;
+    }
+
+    if (normNoMedian.length > 1) {
+      const list = normNoMedian.map(([, c], i) => `${i + 1}. ${c.name}`).join('\n');
+      setPendingConfirmation(from, { type: 'norm_median_class_choice', data: { num: numericInput, classes: normNoMedian.map(([k, c]) => ({ classKey: k, name: c.name })) }, question: list });
+      console.log('SAVED PENDING:', 'norm_median_class_choice');
+      await sendMessage(from, `Which class is ${numericInput} the median for?\n${list}`);
+      return;
+    }
+  }
+
   await sendMessage(from, "I'm not sure what you meant. Text \"help\" to see all commands.");
 }
 
@@ -1484,12 +1572,18 @@ async function showGrade(from, classKey) {
 
   let msg = `${classData.name}\n`;
   if (hasCurve) {
-    msg += `Raw: ${rawGrade}% ${getLetterGrade(rawGrade)}\n`;
     if (curveNoShift) {
+      msg += `Grade: ${rawGrade}% ${getLetterGrade(rawGrade)}\n`;
       msg += `Curve: ${curveNote}\n`;
-    } else if (curvedLetter) {
+    } else if (curvedLetter && curvedGrade !== rawGrade) {
+      // Curve changes the numeric grade (flat/mean) — show both
+      msg += `Raw: ${rawGrade}% ${getLetterGrade(rawGrade)}\n`;
       msg += `Curved: ${curvedGrade}% ${curvedLetter} — ${curveNote}\n`;
+    } else if (curvedLetter) {
+      // Norm curve — number unchanged, only letter changes
+      msg += `Curved: ${rawGrade}% ${curvedLetter} — ${curveNote}\n`;
     } else if (curvePending) {
+      msg += `Grade: ${rawGrade}% ${getLetterGrade(rawGrade)}\n`;
       msg += `Curve pending — ${curveNote}\n`;
     }
   } else {

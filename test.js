@@ -931,6 +931,141 @@ test('Single grade entered — completedWeight reflects only that category', () 
   assert.strictEqual(r.rawGrade, 80.0);
 });
 
+// ── Bug #1: plain number auto-routed to norm median ──────────────────────────
+
+await testA('Plain number with one norm class missing median → norm_median_from_number pending', async () => {
+  reset(); mute();
+  await say('new class: DS');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no'); // norm curve, no canvas
+  await say('80'); // plain number — only one norm class, no median
+  unmute();
+  const pc = getPending();
+  assert.ok(pc, 'should have pending');
+  assert.strictEqual(pc.type, 'norm_median_from_number');
+  assert.strictEqual(pc.data.num, 80);
+  assert.strictEqual(pc.data.classKey, 'ds');
+});
+
+await testA('norm_median_from_number yes → median saved', async () => {
+  reset(); mute();
+  await say('new class: DS');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no');
+  await say('80');
+  await say('yes');
+  unmute();
+  const cd = getClassData('ds');
+  assert.strictEqual(cd.curve.median, 80);
+});
+
+await testA('norm_median_from_number no → no median saved', async () => {
+  reset(); mute();
+  await say('new class: DS');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no');
+  await say('80');
+  await say('no');
+  unmute();
+  const cd = getClassData('ds');
+  assert.ok(cd.curve?.median == null, 'median should not be saved');
+});
+
+await testA('Plain number with multiple norm classes → norm_median_class_choice pending', async () => {
+  reset(); mute();
+  await say('new class: DS');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no');
+  await say('new class: Algo');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no');
+  await say('72'); // two norm classes, both missing median
+  unmute();
+  const pc = getPending();
+  assert.ok(pc, 'should have pending');
+  assert.strictEqual(pc.type, 'norm_median_class_choice');
+  assert.strictEqual(pc.data.num, 72);
+  assert.strictEqual(pc.data.classes.length, 2);
+});
+
+await testA('norm_median_class_choice by number → saves median for chosen class', async () => {
+  reset(); mute();
+  await say('new class: DS');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no');
+  await say('new class: Algo');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no');
+  await say('72');
+  await say('1'); // pick first class
+  unmute();
+  // One of the two classes should now have median=72
+  const ds = getClassData('ds');
+  const algo = getClassData('algo');
+  const saved = (ds?.curve?.median === 72) || (algo?.curve?.median === 72);
+  assert.ok(saved, 'median should be saved for the chosen class');
+});
+
+await testA('Plain number with no norm classes → not intercepted (unknown)', async () => {
+  reset(); mute();
+  await setupClass('Bio 101'); // no-curve class
+  await say('80');
+  unmute();
+  // Should NOT save norm_median_from_number since no norm classes exist
+  const pc = getPending();
+  assert.ok(!pc || pc.type !== 'norm_median_from_number', 'should not be norm median pending');
+});
+
+// ── Bug #2: norm curve display ────────────────────────────────────────────────
+
+test('Norm letter-only: applyCurveToFinal shows curved letter, not pending', () => {
+  const c = mkClass({
+    categories: [{ name: 'Homework', weight: 100 }],
+    grades: { homework: [85] },
+    curve: { type: 'norm', median: null, mappedGrade: 'B+' },
+  });
+  const r = calcCurrentGrade(c);
+  assert.ok(!r.curvePending, 'should NOT be pending when mappedGrade is set');
+  assert.strictEqual(r.curvedLetter, 'B+');
+  assert.ok(r.curveNote.includes('no numeric median'));
+});
+
+await testA('Norm letter-only: grade display says Curved: not Curve pending', async () => {
+  reset(); mute();
+  await say('new class: DS');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no');
+  await say('got 85 on ds homework');
+  unmute();
+  // Inject letter-only norm curve state
+  const data = getData();
+  data.classes['ds'].curve = { type: 'norm', mappedGrade: 'B+' };
+  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  const msgs = await capture(async () => { await say("what's my grade in ds"); });
+  const hasGrade = msgs.some(m => m.includes('Curved:') && m.includes('B+'));
+  const hasPending = msgs.some(m => m.includes('Curve pending'));
+  assert.ok(hasGrade, `expected "Curved: ... B+" in output, got: ${JSON.stringify(msgs)}`);
+  assert.ok(!hasPending, 'should NOT show "Curve pending"');
+});
+
+await testA('awaiting_numeric_median skip → hint message includes how to set later', async () => {
+  reset(); mute();
+  await say('new class: DS');
+  await say('Homework 50%, Final 50%');
+  await say('3'); await say('no');
+  unmute();
+  const data = getData();
+  data.classes['ds'].curve = { type: 'norm' };
+  data.userStates = data.userStates || {};
+  data.userStates[FROM] = { step: 'idle', pendingClass: null,
+    pendingConfirmation: { type: 'awaiting_numeric_median', data: { classKey: 'ds', letter: 'B+' }, question: 'q' },
+  };
+  writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  const msgs = await capture(async () => { await say('skip'); });
+  const hasHint = msgs.some(m => m.includes('class median was') || m.includes('median'));
+  assert.ok(hasHint, `expected hint about setting median later, got: ${JSON.stringify(msgs)}`);
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Restore real data
 if (backup) {
