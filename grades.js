@@ -268,6 +268,26 @@ export function calcNeeded(classData, targetCurvedGrade) {
   return r1(needed);
 }
 
+/**
+ * Calculate the best possible grade assuming 100 on all remaining assignments.
+ * Returns same shape as calcCurrentGrade, or null if all categories already have grades.
+ */
+export function calcBestPossible(classData) {
+  const merged = mergeGrades(classData);
+  const hasRemaining = classData.categories.some(cat => {
+    const key = cat.name.toLowerCase();
+    return !merged[key] || merged[key].length === 0;
+  });
+  if (!hasRemaining) return null;
+
+  const clone = { ...classData, grades: {}, canvasGrades: {} };
+  for (const cat of classData.categories) {
+    const key = cat.name.toLowerCase();
+    clone.grades[key] = merged[key]?.length > 0 ? [...merged[key]] : [100];
+  }
+  return calcCurrentGrade(clone);
+}
+
 const GPA_POINTS = {
   'A': 4.0, 'A-': 3.7,
   'B+': 3.3, 'B': 3.0, 'B-': 2.7,

@@ -235,6 +235,8 @@ Actions and their JSON shapes:
 - enter_manually:      { "action": "enter_manually", "classKey": "data structures" }
 - show_gpa:            { "action": "show_gpa" }
 - set_credits:         { "action": "set_credits", "classKey": "bio 101", "credits": 3 }
+- hypothetical_grade:  { "action": "hypothetical_grade", "classKey": "bio 101", "categoryName": "final", "score": 80 }
+- delete_grade:        { "action": "delete_grade", "classKey": "bio 101", "categoryName": "midterm", "score": 45 }
 - confirm:             { "action": "confirm", "guess": "Did you mean to set the class average for Bio 101 midterm to 71?", "confirmedIntent": { "action": "enter_class_average", "classKey": "bio 101", "categoryName": "midterm", "average": 71 } }
 - unknown:             { "action": "unknown" }
 
@@ -254,6 +256,8 @@ Rules:
 - "enter manually", "manual", "add manually", "enter grades manually", "add grades manually" → enter_manually
 - "what's my GPA", "show GPA", "calculate GPA", "my GPA", "semester GPA" → show_gpa
 - "bio is 3 credits", "set bio to 4 credits", "bio 101 is 3 credit hours", "[class] = N credits" → set_credits
+- "what would my grade be if I got 80 on the final", "if I score 90 on midterm what's my grade", "hypothetically if I get 75 on the final" → hypothetical_grade
+- "remove my 45 on bio midterm", "delete last bio midterm grade", "erase my 72 on the final" → delete_grade; score is optional — omit if not specified
 - Only use action "unknown" when you genuinely cannot determine any intent (e.g. gibberish or completely off-topic)`;
 
   const raw = await askClaude(system, message);

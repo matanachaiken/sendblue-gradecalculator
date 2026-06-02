@@ -54,6 +54,7 @@ import {
 import {
   calcCurrentGrade,
   calcNeeded,
+  calcBestPossible,
   calcGPA,
   getLetterGrade,
 } from './grades.js';
@@ -945,6 +946,15 @@ async function handleIntent(from, text, intent) {
         await sendMessage(from, `Undone — removed the norm curve letter grade for ${last.className}. You're back to where you were.`);
         break;
       }
+      case 'grade_deleted': {
+        const cd = getClass(last.classKey);
+        if (cd) {
+          cd.grades[last.catKey] = last.previousGrades;
+          saveClass(last.classKey, cd);
+        }
+        await sendMessage(from, `Undone — restored ${last.catDisplay} grade of ${last.removedScore} in ${last.className}.`);
+        break;
+      }
       case 'class_added': {
         deleteClass(last.classKey);
         await sendMessage(from, `Undone — deleted ${last.className}. You're back to where you were.`);
@@ -1014,6 +1024,110 @@ async function handleIntent(from, text, intent) {
     return;
   }
 
+  // ── Hypothetical grade ────────────────────────────────────────────────────
+  if (action === 'hypothetical_grade') {
+    const { classKey, categoryName, score } = intent;
+
+    if (!classKey || score === undefined || score === null) {
+      await sendMessage(from, 'Try: "what would my grade be if I got 85 on the bio final?"');
+      return;
+    }
+
+    if (Number(score) < 0 || Number(score) > 150) {
+      await sendMessage(from, `That score doesn't look right (${score}). Enter a number between 0 and 150.`);
+      return;
+    }
+
+    const classData = getClass(classKey);
+    if (!classData) {
+      await sendMessage(from, `No class matching "${classKey}".`);
+      return;
+    }
+
+    const catKey = findCategoryKey(classData, categoryName);
+    if (!catKey) {
+      const names = classData.categories.map(c => c.name).join(', ');
+      await sendMessage(from, `"${categoryName}" doesn't match any category in ${classData.name}.\nKnown: ${names}`);
+      return;
+    }
+
+    const clone = JSON.parse(JSON.stringify(classData));
+    clone.grades[catKey] = clone.grades[catKey] || [];
+    clone.grades[catKey].push(Number(score));
+
+    const result = calcCurrentGrade(clone);
+    if (!result) {
+      await sendMessage(from, 'Not enough grade data to project.');
+      return;
+    }
+
+    const catDisplay = classData.categories.find(c => c.name.toLowerCase() === catKey)?.name || catKey;
+    const gradeStr = result.curvedLetter
+      ? `${result.curvedGrade}% ${result.curvedLetter} (curved)`
+      : `${result.rawGrade}% ${getLetterGrade(result.rawGrade)}`;
+
+    await sendMessage(from, `If you get ${score} on ${catDisplay} in ${classData.name}:\n${gradeStr}`);
+    return;
+  }
+
+  // ── Delete a single grade ─────────────────────────────────────────────────
+  if (action === 'delete_grade') {
+    const { classKey, categoryName, score } = intent;
+
+    if (!classKey) {
+      await sendMessage(from, 'Try: "remove my 45 on bio midterm"');
+      return;
+    }
+
+    const classData = getClass(classKey);
+    if (!classData) {
+      await sendMessage(from, `No class matching "${classKey}".`);
+      return;
+    }
+
+    const catKey = findCategoryKey(classData, categoryName);
+    if (!catKey) {
+      const names = classData.categories.map(c => c.name).join(', ');
+      await sendMessage(from, `"${categoryName}" doesn't match any category in ${classData.name}.\nKnown: ${names}`);
+      return;
+    }
+
+    const manualGrades = classData.grades[catKey] || [];
+    if (manualGrades.length === 0) {
+      const hasCanvas = (classData.canvasGrades?.[catKey] || []).length > 0;
+      if (hasCanvas) {
+        await sendMessage(from, `No manual grades to delete for ${catKey} — those scores came from Canvas. Sync Canvas again if a score was wrong.`);
+      } else {
+        await sendMessage(from, `No grades entered for ${catKey} in ${classData.name}.`);
+      }
+      return;
+    }
+
+    const previousGrades = [...manualGrades];
+    let removed;
+
+    if (score !== undefined && score !== null) {
+      const idx = manualGrades.indexOf(Number(score));
+      if (idx === -1) {
+        await sendMessage(from, `Couldn't find a grade of ${score} in ${catKey} for ${classData.name}.\nGrades on record: ${manualGrades.join(', ')}`);
+        return;
+      }
+      removed = manualGrades.splice(idx, 1)[0];
+    } else {
+      removed = manualGrades.pop();
+    }
+
+    classData.grades[catKey] = manualGrades;
+    saveClass(classKey, classData);
+
+    const catDisplay = classData.categories.find(c => c.name.toLowerCase() === catKey)?.name || catKey;
+    saveLastAction({ type: 'grade_deleted', classKey, className: classData.name, catKey, catDisplay, removedScore: removed, previousGrades });
+
+    await sendMessage(from, `Removed ${removed} from ${catDisplay} in ${classData.name}.`);
+    await showGrade(from, classKey);
+    return;
+  }
+
   // ── Manual entry hint ─────────────────────────────────────────────────────
   if (action === 'enter_manually') {
     const classData = intent.classKey ? getClass(intent.classKey) : null;
@@ -1073,6 +1187,10 @@ async function performCanvasSync(from, classKeys) {
           from,
           'Canvas token expired. Generate a new one:\nCanvas → Account → Settings → Approved Integrations → New Access Token\n\nThen text "connect canvas" to reconnect.'
         );
+        return;
+      }
+      if (err.code === 'ECONNABORTED') {
+        await sendMessage(from, 'Canvas took too long to respond. Try "sync canvas" again in a moment.');
         return;
       }
       console.error(`Canvas fetch error for ${classKey}:`, err.message);
@@ -1139,6 +1257,7 @@ async function performCanvasSync(from, classKeys) {
 
     classData.canvasGrades = newCanvasGrades;
     classData.canvasAssignmentMap = map;
+    classData.lastSyncedAt = new Date().toISOString();
     saveClass(classKey, classData);
   }
 
@@ -1264,7 +1383,20 @@ async function showGrade(from, classKey) {
   }
   msg += `(${completedWeight}% of grade entered)\n\n`;
   msg += catLines.join('\n');
+
+  if (remainingWeight > 0) {
+    const best = calcBestPossible(classData);
+    if (best) {
+      const bestStr = best.curvedLetter
+        ? `${best.curvedGrade}% ${best.curvedLetter}`
+        : `${best.rawGrade}% ${getLetterGrade(best.rawGrade)}`;
+      msg += `\n\nBest possible: ${bestStr}`;
+    }
+  }
+
   if (neededLines.length) msg += '\n\nTo earn:\n' + neededLines.join('\n');
+
+  if (classData.lastSyncedAt) msg += `\n\nLast synced: ${timeAgo(classData.lastSyncedAt)}`;
 
   await sendMessage(from, msg);
 }
@@ -1283,14 +1415,25 @@ async function showAllGrades(from) {
     const result = calcCurrentGrade(c);
     const badge = c.canvasSynced ? ' [Canvas]' : '';
     if (!result) return `${c.name}${badge}: no grades yet`;
-    const { currentGrade, completedWeight } = result;
-    return `${c.name}${badge}: ${currentGrade}% ${getLetterGrade(currentGrade)} (${completedWeight}% graded)`;
+    const { rawGrade, curvedGrade, curvedLetter, completedWeight } = result;
+    const displayGrade = curvedLetter ? `${curvedGrade}% ${curvedLetter}` : `${rawGrade}% ${getLetterGrade(rawGrade)}`;
+    return `${c.name}${badge}: ${displayGrade} (${completedWeight}% graded)`;
   });
 
   await sendMessage(from, 'All classes:\n' + lines.join('\n'));
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function timeAgo(isoString) {
+  const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 /**
  * Save a parsed syllabus result and move the conversation forward.

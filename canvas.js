@@ -19,6 +19,7 @@ async function canvasGet(baseUrl, token, path, params = {}) {
     const res = await axios.get(url, {
       headers: { Authorization: `Bearer ${token}` },
       params: { per_page: 100, ...params },
+      timeout: 15000,
     });
     return res.data;
   } catch (err) {
