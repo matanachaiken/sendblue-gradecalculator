@@ -70,6 +70,7 @@ export async function handleIncomingMessage(from, text, mediaUrl) {
   const trimmed = text.trim();
 
   console.log('PENDING STATE:', JSON.stringify(state.pendingConfirmation || null));
+  if (mediaUrl) console.log('[media] url received, step:', state.step);
 
   // pendingConfirmation wins over EVERYTHING — check before media, before step, before intent.
   if (state.pendingConfirmation) {
@@ -78,13 +79,16 @@ export async function handleIncomingMessage(from, text, mediaUrl) {
     return;
   }
 
-  // Photo with no text
+  // If awaiting a syllabus and a file arrived, always try to read it —
+  // even if there is also text content (e.g. filename sent alongside the attachment).
+  if (mediaUrl && state.step === 'awaiting_syllabus') {
+    await handleSyllabusPhoto(from, mediaUrl, state);
+    return;
+  }
+
+  // File received outside of syllabus setup
   if (mediaUrl && !trimmed) {
-    if (state.step === 'awaiting_syllabus') {
-      await handleSyllabusPhoto(from, mediaUrl, state);
-    } else {
-      await sendMessage(from, 'To read a syllabus photo or PDF, say "new class: [name]" first, then send the file.');
-    }
+    await sendMessage(from, 'To read a syllabus photo or PDF, say "new class: [name]" first, then send the file.');
     return;
   }
 
@@ -565,7 +569,10 @@ async function handleSyllabusPhoto(from, mediaUrl, state) {
         console.log('[media] extracting text from PDF');
         const pdfData = await pdfParse(buf);
         const text = pdfData.text;
-        if (!text?.trim()) throw new Error('PDF has no extractable text (may be a scanned image PDF)');
+        if (!text?.trim()) {
+          await sendMessage(from, "This PDF appears to be a scanned image — I can't extract text from it directly. Try copy-pasting the grading breakdown section as text instead.");
+          return;
+        }
         parsed = await parseSyllabus(state.pendingClass, text);
       } else {
         // Image path — convert unsupported formats (HEIC, etc.) to JPEG via sharp
